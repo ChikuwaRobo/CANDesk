@@ -147,6 +147,86 @@ CAN ID ごとの一覧では、次の列を表示する。
 
 初期段階では、拡張モジュールがフレームストリームまたはデコード済み信号ストリームを購読できるようにする。プロットに必要な履歴リングバッファ、対象信号選択、表示設定は拡張モジュール側に閉じ込め、GUI 本体の複雑化を避ける。
 
+## 受信専用 GUI 構成
+
+当面の GUI は受信専用に限定する。送信、定期送信、送信プリセット編集、DBC 読み込み、プロットは初期 GUI から外す。最初の目的は、2 台の WeActStudio USB2CANFDV1 を 1 Mbps で接続し、`CAN0` と `CAN1` の受信状態を同一画面で安定して観測できることである。
+
+画面は、次の構成にする。
+
+```text
++--------------------------------------------------------------+
+| Top bar                                                      |
+| device refresh | connect all | disconnect all | capture CSV  |
++----------------------+---------------------------------------+
+| Bus panel            | Latest frame table                    |
+| - CAN0 port/settings | bus | id | fmt | len | data | rate... |
+| - CAN1 port/settings |                                       |
+| - status counters    |                                       |
++----------------------+---------------------------------------+
+| Detail panel                                                 |
+| selected frame raw data, decoded metadata, raw adapter line   |
++--------------------------------------------------------------+
+| Event/status strip                                            |
++--------------------------------------------------------------+
+```
+
+各構成要素の責務は次の通り。
+
+| 構成要素 | 内容 |
+| --- | --- |
+| Top bar | ポート再読み込み、全接続、全切断、CSV キャプチャ開始、グローバル状態表示 |
+| Bus panel | 各バスの port、adapter、bitrate、data bitrate、listen-only、接続状態、受信数、エラー数を表示する |
+| Latest frame table | `LatestFrameState` を表示する主画面。高頻度受信でも表の行数は CAN ID 単位に抑える |
+| Detail panel | 選択行の payload、DLC、flags、timestamp、raw line を確認する |
+| Event/status strip | 接続、切断、BEL、パース不能行、キャプチャ完了などの短い状態イベントを表示する |
+
+Bus panel は、実用上の初期対象である 2 バスを最初から扱える形にする。既定候補は `CAN0=COM3`、`CAN1=COM85`、bitrate `S8`、data bitrate `Y2`、listen-only 有効とする。ただしポート名は環境依存なので、UI ではシリアルポート再読み込みで選び直せるようにする。将来 4 バスへ増やす場合も、同じ bus card を縦に増やせる構造にする。
+
+Latest frame table の列は、初期実装では次を表示する。
+
+- `bus`
+- `id`
+- `id_format`
+- `frame_format`
+- `dlc`
+- `data_length`
+- `data_hex`
+- `flags`
+- `last_seen`
+- `rate_hz`
+- `count`
+
+表は、受信した生フレームを全件追加する形式にしない。Rust 側で latest-frame state を作り、GUI には一定周期で snapshot または差分を渡す。初期値は 5 Hz 程度の UI 更新でよい。内部受信は落とさず継続し、UI 更新だけを間引く。
+
+フィルタと表示補助は、初期実装では軽量に留める。
+
+- bus filter。`ALL`、`CAN0`、`CAN1` を選べる。
+- CAN ID 検索。16 進文字列の部分一致でよい。
+- pause display。受信は継続し、画面更新だけ止める。
+- clear view。latest-frame state と表示上の count をクリアする。デバイス接続は維持する。
+
+CSV キャプチャは、既存 CLI capture と同じ列定義を使う。GUI からは「保存先、期間、対象 bus」を指定してサーバー側 capture service を呼ぶ。受信専用 GUI の範囲では、キャプチャに送信フレームを含める設定は表示しない。
+
+接続操作の最小フローは次の通り。
+
+1. 起動時に serial port を列挙する。
+2. VID/PID `0483:5740`、serial が `AA` で始まるポートを WeAct V1 候補として表示する。
+3. `CAN0` と `CAN1` に port、bitrate、listen-only を割り当てる。
+4. Connect を押すと、Rust 側で `C`、`M1`、`A0`、`S8`、`Y2`、`O` の順に初期化する。
+5. 受信が始まったら Latest frame table を更新する。
+6. Disconnect では `C` を送り、該当 bus の受信を停止する。
+
+エラー表示は、操作を止める modal よりも状態表示を優先する。接続失敗、BEL、パース不能行、serial timeout は bus card と Event/status strip に表示する。接続中の一時的な timeout は受信フレームがない状態として扱い、即エラーにはしない。
+
+初期 GUI の完了条件は次の通り。
+
+- `COM3` と `COM85` を `CAN0`、`CAN1` として同時接続できる。
+- 両方を `S8`、listen-only で受信できる。
+- 受信一覧が CAN ID 単位で更新され、UI が高頻度フレームで固まらない。
+- 選択したフレームの詳細を確認できる。
+- GUI から CSV キャプチャを実行できる。
+- GUI を閉じたとき、接続中の adapter に `C` を送って閉じる。
+
 ## CAN データ送信
 
 送信機能はサーバーで管理する。GUI は送信要求をサーバー API へ送る。

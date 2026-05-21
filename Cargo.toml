@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/canrush-core",
     "crates/canrush-cli",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
