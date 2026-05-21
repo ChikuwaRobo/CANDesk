@@ -388,6 +388,16 @@ GUI より先に CLI capture を作る。CLI は表示に依存しないため�
 - BEL、タイムアウト、パース不能行を状態イベントとして記録できる。
 - fake adapter で通っていた CLI capture が、実 adapter でも動く。
 
+CLI 完結部分の初期実装として、1 から 4 の範囲は次の形で実装した。
+
+- `canrush-core` に共通 CAN フレーム型、CAN FD DLC 変換、slcan parser、WeAct SLCAN-FD parser を追加した。
+- `FakeAdapter` からサンプルフレームを流し、実機なしで capture と CSV 出力を確認できるようにした。
+- `FrameHub` と `LatestFrameState` を追加し、GUI 予定の latest-frame 集約キーをコード化した。
+- `canrush-cli` に `capture` と `list-ports` を追加した。
+- `capture --adapter fake` は実機なしで動作する。
+- `capture --adapter weact --port COMx` は WeActStudio USB2CANFDV1 の仮想シリアルポートへ接続し、`C`、`H0`、`M0/M1`、`A0`、`Sx`、`Yx`、`O` の順で初期化する。
+- WeAct 実 adapter は受信専用で開始し、送信は後続フェーズで追加する。
+
 ### 5. 読み取り専用 GUI
 
 GUI は最初から多機能にしない。まず、デバイス接続と受信一覧だけを Tauri 上に載せる。
