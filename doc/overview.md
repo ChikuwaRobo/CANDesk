@@ -400,6 +400,17 @@ CLI 完結部分の初期実装として、1 から 4 の範囲は次の形で�
 
 実機接続確認では、WeActStudio USB2CANFDV1 の 2 台が `COM3` と `COM85` として認識された。どちらも `V` に firmware 文字列を返し、`C`、`M1`、`A0`、`S4`、`Y2`、`O`、`C` は正常応答した。一方で `H0` は BEL を返し、後続の `M0/M1` が失敗することがあったため、初期実装では `H0` を送らない。接続チェックでは、CAN bitrate を 1 Mbps の `S8` に設定すると受信できた。`COM3` は 3 秒で 13073 フレーム、`COM85` は 3 秒で 16517 フレームを通常モードで受信した。`--listen-only --bitrate S8` でも、`COM3` は 2 秒で 8622 フレーム、`COM85` は 2 秒で 11007 フレームを受信した。
 
+WeActStudio USB2CANFDV1 SLCAN Firmware のソース確認で得た実装メモは次の通り。
+
+- `Source/App/slcan.c` では、ASCII mode の受信フレームとして Classical CAN は `t/T/r/R`、CAN FD は `d/D/b/B` を生成する。`b/B` は BRS あり、`d/D` は BRS なしである。
+- `Source/App/slcan.c` の `M` と `A` は CAN が OFF_BUS のときだけ成功する。したがって初期化順は必ず `C` の後に `M0/M1` と `A0/A1` を送る。
+- `Source/App/slcan.c` では `H0/H1` 自体は実装されているが、確認した実機 firmware では `H0` が BEL を返した。CANRush では verified firmware の挙動を優先し、初期化時に `H0` を送らない。
+- `Source/Bsp/can.c` の初期値は nominal bitrate が 125 kbit/s、data bitrate が 2 Mbit/s、silent off、standard/extended filter は ID 0 / mask 0 である。
+- `Source/Bsp/can.c` の `can_enable` は FDCAN を `FDCAN_FRAME_FD_BRS` で起動する。Classical CAN と CAN FD の両方を同じ adapter profile で扱える。
+- `Source/Bsp/can.c` では `S8` が 1 Mbit/s に対応する。`Y1` から `Y5` は CAN FD data phase の 1 から 5 Mbit/s に対応する。
+- `Source/Bsp/can.c` の silent mode は `FDCAN_MODE_BUS_MONITORING` で実装されており、CANRush の `--listen-only` は `M1` として扱う。
+- `Source/App/slcan.h` の `SLCAN_MTU` は CAN FD 64 byte payload を ASCII 表現できる大きさで、`1 + 8 + 1 + 128 + 1` を前提にしている。
+
 ### 5. 読み取り専用 GUI
 
 GUI は最初から多機能にしない。まず、デバイス接続と受信一覧だけを Tauri 上に載せる。
