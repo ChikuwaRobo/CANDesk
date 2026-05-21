@@ -229,6 +229,212 @@ API は、制御系とストリーム系を分ける。
 
 ただし、実装言語や GUI フレームワークを選ぶ前に API 形式を固定しすぎない。重要なのは、GUI と CLI が同じサーバー API を使い、CAN デバイスへの直接アクセスをサーバーへ集約することである。
 
+## 具体実装案
+
+現時点の推奨実装は、Rust を中核にしたデスクトップアプリ構成とする。CAN の受信、送信、キャプチャ、アダプタ抽象化、CLI は Rust で実装し、GUI は Tauri + TypeScript で構築する。GUI は表示と操作要求の発行に集中し、CAN デバイス制御や定期送信の時刻管理を持たない。
+
+Rust を中核にする理由は次の通り。
+
+- GUI アプリと CLI で同じ core crate を共有できる。
+- シリアル通信、SocketCAN、将来の USB/libusb やベンダー SDK 連携を adapter 単位で分離しやすい。
+- CAN フレームのパース、DLC 検証、定期送信、キャプチャのような状態管理を型で表現しやすい。
+- Windows を初期対象にしつつ、Linux/macOS 対応を後から完全な作り直しなしで検討できる。
+
+想定する workspace 構成は次の通り。
+
+```text
+crates/
+  canrush-core/          # 共通データモデル、frame hub、capture、tx scheduler
+  canrush-adapter-slcan/ # 標準 slcan adapter
+  canrush-adapter-weact/ # WeActStudio USB2CANFDV1 adapter
+  canrush-cli/           # capture/export CLI
+apps/
+  desktop/               # Tauri desktop app
+    src-tauri/           # Rust 側。core を起動し、GUI API を公開する
+    src/                 # TypeScript GUI
+```
+
+初期実装では、adapter crate を細かく分けすぎず、`canrush-core` 内に `adapters::weact_slcan_fd` と `adapters::slcan` を置いてもよい。ただし公開 trait とデータモデルは、後で crate 分割しても壊れにくい形にする。
+
+Rust 側の主要モジュールは次のように分ける。
+
+| モジュール | 責務 |
+| --- | --- |
+| `model` | `CanFrame`、`BusId`、`CanId`、`FrameFormat`、`BusCapability` などの共通型 |
+| `adapter` | `CanAdapter` trait、デバイス列挙、接続、受信ストリーム、送信 API |
+| `protocol::slcan` | 標準 slcan の行パースと送信行生成 |
+| `protocol::weact` | `d/D/b/B`、`Yx`、`H0` など WeAct SLCAN-FD 拡張 |
+| `server` | 接続済みバスの管理、frame hub、状態イベント配信 |
+| `capture` | 指定時間キャプチャ、CSV formatter |
+| `tx` | 単発送信、定期送信、周期変更、停止 |
+| `storage` | 設定、送信プリセット CSV の読み書き |
+
+`CanAdapter` trait は、少なくとも次の操作を持つ。
+
+```text
+list_devices()
+connect(device, config)
+disconnect()
+capability()
+frames()
+send(frame)
+status()
+```
+
+受信フレームは adapter から server の frame hub に集約する。frame hub は、GUI の最新値一覧、CLI キャプチャ、将来ログの購読元になる。GUI 表示用にはすべての生フレームをそのまま描画せず、サーバー側で `bus + frame_format + id_format + id + frame_type` ごとの latest-frame state を作り、一定周期で UI に差分通知する。
+
+GUI は次の画面構成から始める。
+
+- デバイス/バス接続パネル: シリアルポート、adapter profile、bitrate、data bitrate、listen-only を選択する。
+- 受信一覧: CAN ID ごとの最新値、周期、受信回数を表示する。
+- フレーム詳細: 選択行の raw payload、DLC、flags、raw adapter line を確認する。
+- 送信パネル: 単発送信と定期送信を扱う。
+- キャプチャ操作: 出力先、時間、対象バスを指定して CSV に保存する。
+
+初期 CLI は `canrush capture` のみに絞る。GUI 内サーバーが起動している場合はそこへ接続し、未起動時に単独でデバイスを開く機能は後続対応にする。CLI の例は次の形にする。
+
+```text
+canrush capture --duration 10s --bus CAN0 --output capture.csv
+canrush capture --duration 30s --all-buses --include-tx --output capture.csv
+```
+
+テストは、実機がなくても進められる層から用意する。
+
+- slcan / WeAct SLCAN-FD の行パースと送信行生成の単体テスト。
+- CAN FD DLC と実データ長の変換テスト。
+- CSV capture formatter のゴールデンファイルテスト。
+- frame hub の複数購読者配信テスト。
+- tx scheduler の周期、停止、周期変更テスト。
+- 実機接続テストは `ignored` または手動テストとして分ける。
+
+最初のマイルストーンは、実機なしで core の大半を検証できる形にする。
+
+1. Rust workspace と `canrush-core` を作る。
+2. 共通 CAN フレーム型、DLC 変換、slcan / WeAct SLCAN-FD parser を実装する。
+3. fake adapter を作り、frame hub と latest-frame state を動かす。
+4. CLI の CSV capture を fake adapter で動かす。
+5. WeAct 実 adapter を追加し、受信表示を動かす。
+6. Tauri GUI を追加し、latest-frame state を一覧表示する。
+7. 送信、定期送信、プリセット CSV を順に追加する。
+
+## 実装順序
+
+実装は、CAN デバイス実機に依存しない基盤から進める。プロトコルパース、内部モデル、frame hub、CSV 出力を先に固めることで、実機接続時の問題を「シリアル通信またはデバイス固有挙動」に切り分けやすくする。
+
+### 0. 開発基盤
+
+最初に Rust workspace、formatter、lint、テスト実行手順を作る。ここではアプリ機能を作り込まない。
+
+完了条件は次の通り。
+
+- `cargo test` が空または最小テストで成功する。
+- `cargo fmt` を適用できる。
+- README から、開発者がテストを実行できる。
+- CI をすぐ用意しない場合でも、ローカルで確認するコマンドを明記する。
+
+### 1. 共通データモデルとプロトコルパーサ
+
+次に `CanFrame`、`BusCapability`、CAN FD DLC 変換、標準 slcan parser、WeAct SLCAN-FD parser を実装する。ここはアプリ全体の土台なので、実機接続より前に単体テストを厚くする。
+
+完了条件は次の通り。
+
+- `t/T/r/R` の Classical CAN 行を `CanFrame` に変換できる。
+- `d/D/b/B` の CAN FD 行を `CanFrame` に変換できる。
+- DLC `0..F` と実データ長の変換がテストされている。
+- 不正な CAN ID、DLC、データ長、16 進文字列を拒否できる。
+- 送信用の `CanFrame` から slcan / WeAct 行を生成できる。
+
+### 2. Fake adapter と frame hub
+
+実機なしでサーバーコアを動かすため、任意のフレーム列を流せる fake adapter を作る。frame hub、latest-frame state、複数購読者配信はこの段階で検証する。
+
+完了条件は次の通り。
+
+- fake adapter から受信フレームを流せる。
+- GUI 用 latest-frame state が `bus + frame_format + id_format + id + frame_type` で集約される。
+- 複数購読者が同じ入力ストリームを受け取れる。
+- 購読者が遅い場合でも、受信処理全体を止めない方針を実装または明文化する。
+
+### 3. CLI capture と CSV 出力
+
+GUI より先に CLI capture を作る。CLI は表示に依存しないため、frame hub と capture service の設計不備を早く見つけやすい。
+
+完了条件は次の通り。
+
+- `canrush capture --duration ... --output ...` が fake adapter で動く。
+- CSV ヘッダと列順が固定されている。
+- `--bus`、`--all-buses`、`--include-tx` の基本オプションを処理できる。
+- キャプチャ時間の制御をサーバー側で行う。
+- CSV formatter のゴールデンファイルテストがある。
+
+### 4. WeAct 実 adapter の受信
+
+ここで初めて WeActStudio USB2CANFDV1 へ接続する。最初は受信専用に絞り、送信や定期送信はまだ入れない。
+
+完了条件は次の通り。
+
+- シリアルポートを列挙し、手動選択で接続できる。
+- `C`、`H0`、`M0/M1`、`A0`、`Sx`、必要なら `Yx`、`O` の初期化順を実行できる。
+- `t/T/r/R/d/D/b/B` の受信行を共通 `CanFrame` に変換できる。
+- BEL、タイムアウト、パース不能行を状態イベントとして記録できる。
+- fake adapter で通っていた CLI capture が、実 adapter でも動く。
+
+### 5. 読み取り専用 GUI
+
+GUI は最初から多機能にしない。まず、デバイス接続と受信一覧だけを Tauri 上に載せる。
+
+完了条件は次の通り。
+
+- GUI からデバイスを選択して接続、切断できる。
+- latest-frame state を一覧表示できる。
+- バス名、CAN ID、frame format、data、受信回数、フレームレートを表示できる。
+- 高頻度受信時も、生フレームを全件 DOM に流さず、一定周期の差分更新にできる。
+
+### 6. 単発送信
+
+受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。
+
+完了条件は次の通り。
+
+- GUI から Classical CAN と CAN FD の単発送信を要求できる。
+- 送信要求、成功、失敗を状態イベントとして追跡できる。
+- 送信済みフレームを `direction=tx` として frame hub に流せる。
+- 不正な DLC、データ長、ID、capability 不一致を送信前に拒否できる。
+
+### 7. 定期送信
+
+定期送信は GUI タイマーではなく server 側 scheduler で実装する。安全上の最小周期と同時ジョブ数の上限をここで決める。
+
+完了条件は次の通り。
+
+- 定期送信の開始、停止、周期変更ができる。
+- GUI を閉じる、または接続を切ると、定期送信が確実に停止する。
+- 最小周期と同時ジョブ数の上限を持つ。
+- scheduler の単体テストで周期、停止、変更を検証できる。
+
+### 8. 送信プリセット CSV
+
+送信処理が安定してから、プリセット CSV を追加する。先にファイル形式を入れると、送信 API の変更に引きずられて CSV 互換性が揺れやすいためである。
+
+完了条件は次の通り。
+
+- CSV を読み込み、各行を送信プリセットとして検証できる。
+- GUI からプリセットを選択して単発または定期送信できる。
+- 不正行を行番号付きで報告できる。
+- 高頻度送信や capability 不一致を読み込み時に検出できる。
+
+### 9. 標準 slcan と後続 adapter
+
+WeAct adapter の受信、送信、CLI、GUI が安定してから標準 slcan adapter を追加する。SocketCAN、gs_usb、ベンダー SDK は同じ `CanAdapter` trait で扱えることを確認しながら後続対応にする。
+
+完了条件は次の通り。
+
+- 標準 slcan adapter が Classical CAN 受信を扱える。
+- `supports_can_fd=false` の bus capability に対して GUI が自然に制限表示できる。
+- adapter 固有コードを UI と CLI に漏らさず追加できる。
+
+各段階では、コード変更後に少なくとも `cargo fmt` と `cargo test` を通す。Tauri GUI を追加した後は、Rust 側の `cargo test` に加えて GUI の型チェック、ビルド、主要画面の手動確認を行う。
+
 ## 初期開発方針
 
 - まずは CAN フレームの受信表示を安定させる。
