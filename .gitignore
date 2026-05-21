@@ -1,0 +1,7 @@
+/target/
+**/*.rs.bk
+node_modules/
+dist/
+.tauri/
+.env
+.env.*

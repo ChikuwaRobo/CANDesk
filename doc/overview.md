@@ -332,6 +332,15 @@ canrush capture --duration 30s --all-buses --include-tx --output capture.csv
 - README から、開発者がテストを実行できる。
 - CI をすぐ用意しない場合でも、ローカルで確認するコマンドを明記する。
 
+開発基盤の初期決定事項は次の通り。
+
+- Rust toolchain は stable を使う。
+- repository root に Cargo workspace を置く。
+- 最初の workspace member は `crates/canrush-core` とする。
+- formatter は `cargo fmt --all`、テストは `cargo test --workspace` を標準確認コマンドにする。
+- lint は `cargo clippy --workspace --all-targets` を使う。
+- 作業開始時点では `rustc` と `cargo` が未検出だったため、Rustup を導入した。新しい PowerShell で PATH が反映されない場合は `%USERPROFILE%\.cargo\bin` を確認する。
+
 ### 1. 共通データモデルとプロトコルパーサ
 
 次に `CanFrame`、`BusCapability`、CAN FD DLC 変換、標準 slcan parser、WeAct SLCAN-FD parser を実装する。ここはアプリ全体の土台なので、実機接続より前に単体テストを厚くする。
