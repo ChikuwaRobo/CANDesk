@@ -1,6 +1,6 @@
 # WeActStudio USB2CANFDV1 対応メモ
 
-この文書は、CANBlaster の初期ターゲットとして使用する WeActStudio USB2CANFDV1 の対応方針をまとめる。
+この文書は、CANRush の初期ターゲットとして使用する WeActStudio USB2CANFDV1 の対応方針をまとめる。
 
 ## 参照元
 
@@ -11,7 +11,7 @@
 
 ## 参考になる WeActStudio リポジトリ
 
-WeActStudio の公開リポジトリを確認した結果、CANBlaster 実装で特に参考になるものは次の通り。
+WeActStudio の公開リポジトリを確認した結果、CANRush 実装で特に参考になるものは次の通り。
 
 | リポジトリ | 用途 |
 | --- | --- |
@@ -49,7 +49,7 @@ WeActStudio の公開リポジトリを確認した結果、CANBlaster 実装で
 - `cangaroo/src/driver/SLCANDriver/SLCANInterface.h`
   - SLCAN-FD 用の MTU、ヘッダ文字、enhanced mode 定義を確認する。
 
-cangaroo は参考実装として読む。コードを直接流用する場合は、CANBlaster 側のライセンス方針と cangaroo のライセンス条件を別途確認する。
+cangaroo は参考実装として読む。コードを直接流用する場合は、CANRush 側のライセンス方針と cangaroo のライセンス条件を別途確認する。
 
 ### CANable / Candlelight
 
@@ -61,16 +61,16 @@ cangaroo は参考実装として読む。コードを直接流用する場合�
 
 - WeActStudio USB2CANFDV1/V2 の SLCAN-FD ASCII mode は、標準 SLCAN の `t/T/r/R` に加えて CAN FD 用の `d/D/b/B` を使う。
 - V1/V2 firmware の README と `slcan.c` は、`Y1` から `Y5` の data bitrate、`H0/H1` enhanced mode、`M0/M1` silent mode、`A0/A1` automatic retransmission を持つ点で一致している。
-- `slcan.c` は DLC の妥当性を Classical CAN では `0..8`、CAN FD では `0..F` として検証し、DLC から実データ長へ変換している。CANBlaster 側も同じ検証を行う。
-- cangaroo の SLCAN parser は `t/T/r/R/d/D/b/B` をすべて受信フレームとして扱い、受信時刻は PC 側で付けている。CANBlaster も初期実装では host timestamp を基準にする。
-- cangaroo では送信成功を CR、送信失敗を BEL として扱い、送信キュー上のフレームと対応付けている。CANBlaster でも送信要求と応答を対応付ける必要がある。
+- `slcan.c` は DLC の妥当性を Classical CAN では `0..8`、CAN FD では `0..F` として検証し、DLC から実データ長へ変換している。CANRush 側も同じ検証を行う。
+- cangaroo の SLCAN parser は `t/T/r/R/d/D/b/B` をすべて受信フレームとして扱い、受信時刻は PC 側で付けている。CANRush も初期実装では host timestamp を基準にする。
+- cangaroo では送信成功を CR、送信失敗を BEL として扱い、送信キュー上のフレームと対応付けている。CANRush でも送信要求と応答を対応付ける必要がある。
 - Enhanced mode は cangaroo と firmware の両方に実装があるが、初期実装では ASCII mode `H0` に限定する。
 
 ## 位置付け
 
 WeActStudio USB2CANFDV1 は、仮想シリアル経由で SLCAN 互換コマンドを扱う USB-CAN FD アダプタである。標準的な LAWICEL SLCAN は Classical CAN 前提だが、このデバイスのファームウェアは CAN FD 用の拡張コマンドを持つ。
 
-CANBlaster では、このデバイスを `weact_slcan_fd` adapter profile として扱う。標準 `slcan` adapter とは分け、CAN FD、BRS、データビットレート、拡張 DLC を扱えるようにする。
+CANRush では、このデバイスを `weact_slcan_fd` adapter profile として扱う。標準 `slcan` adapter とは分け、CAN FD、BRS、データビットレート、拡張 DLC を扱えるようにする。
 
 ## 想定 capability
 
@@ -179,7 +179,7 @@ CAN FD の DLC は 16 進 1 桁で表現する。DLC と実データ長の対応
 | `E` | 48 バイト |
 | `F` | 64 バイト |
 
-CANBlaster の共通フレームモデルでは、元の DLC と実データ長を分けて保持する。
+CANRush の共通フレームモデルでは、元の DLC と実データ長を分けて保持する。
 
 ## その他のコマンド
 

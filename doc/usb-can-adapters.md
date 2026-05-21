@@ -1,12 +1,12 @@
 # USB-CAN アダプタ対応方針
 
-この文書は、CANBlaster で扱う USB-CAN アダプタと CAN Adapter Layer の設計方針をまとめる。SLCAN の詳細仕様は [slcan 仕様メモ](./slcan.md) に分ける。
+この文書は、CANRush で扱う USB-CAN アダプタと CAN Adapter Layer の設計方針をまとめる。SLCAN の詳細仕様は [slcan 仕様メモ](./slcan.md) に分ける。
 
 初期ターゲットは [WeActStudio USB2CANFDV1](./weact-usb2canfdv1.md) とする。このデバイスは SLCAN 系だが CAN FD 用の拡張コマンドを持つため、標準 `slcan` ではなく `weact_slcan_fd` adapter profile として扱う。
 
 ## 基本方針
 
-CANBlaster は、特定の USB-CAN プロトコルに固定しない。サーバー内部に CAN Adapter Layer を置き、アダプタごとの差異を共通インターフェースへ変換する。
+CANRush は、特定の USB-CAN プロトコルに固定しない。サーバー内部に CAN Adapter Layer を置き、アダプタごとの差異を共通インターフェースへ変換する。
 
 初期設計では、次の系統を想定する。
 
@@ -80,7 +80,7 @@ Windows/macOS で gs_usb 系デバイスを扱う場合は、OS 標準の Socket
 
 ## slcan
 
-slcan は ASCII ベースで実装しやすいが、標準仕様は Classical CAN 前提であり、CAN FD を扱わない。CANBlaster では slcan を CAN Adapter Layer の一実装として扱う。
+slcan は ASCII ベースで実装しやすいが、標準仕様は Classical CAN 前提であり、CAN FD を扱わない。CANRush では slcan を CAN Adapter Layer の一実装として扱う。
 
 slcan アダプタの `supports_can_fd` は通常 false とする。独自拡張で CAN FD を扱うデバイスがある場合は、標準 slcan とは別 adapter profile として扱う。WeActStudio USB2CANFDV1 はこの例であり、`weact_slcan_fd` として実装する。
 

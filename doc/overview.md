@@ -1,6 +1,6 @@
-# CANBlaster 開発概要
+# CANRush 開発概要
 
-CANBlaster は、USB-CAN アダプタを PC から利用するためのビューワツールとして開発する。slcan だけに限定せず、gs_usb / SocketCAN 系、将来のベンダー SDK 系アダプタも扱える構成にする。
+CANRush は、USB-CAN アダプタを PC から利用するためのビューワツールとして開発する。slcan だけに限定せず、gs_usb / SocketCAN 系、将来のベンダー SDK 系アダプタも扱える構成にする。
 
 初期ターゲットの USB-CAN アダプタは WeActStudio USB2CANFDV1 とする。このデバイスは SLCAN 互換の仮想シリアルインターフェースを持つが、CAN FD 用の独自拡張も持つため、標準 `slcan` ではなく `weact_slcan_fd` adapter profile として扱う。
 
@@ -12,7 +12,7 @@ CANBlaster は、USB-CAN アダプタを PC から利用するためのビュー
 
 ## 想定する利用形態
 
-CANBlaster は、デスクトップアプリとして提供する。アプリ内部にサーバー機能を持たせ、サーバーが USB-CAN アダプタを直接管理する。GUI と CLI は同じサーバー API を通して CAN データへアクセスする。
+CANRush は、デスクトップアプリとして提供する。アプリ内部にサーバー機能を持たせ、サーバーが USB-CAN アダプタを直接管理する。GUI と CLI は同じサーバー API を通して CAN データへアクセスする。
 
 主な利用形態は次の通り。
 
@@ -37,7 +37,7 @@ CANBlaster は、デスクトップアプリとして提供する。アプリ内
 | - extension module host     |      +---------+--------+
 |                             |                |
 | +-------------------------+ |                | server API
-| | CANBlaster Server Core  |<----------------+
+| | CANRush Server Core     |<----------------+
 | | - device/session mgmt   | |
 | | - frame stream hub      | |
 | | - capture service       | |
@@ -68,7 +68,7 @@ CANBlaster は、デスクトップアプリとして提供する。アプリ内
 
 ## サーバーの責務
 
-サーバーは CANBlaster の中核として、次の責務を持つ。
+サーバーは CANRush の中核として、次の責務を持つ。
 
 - 複数 USB-CAN アダプタの接続、切断、再接続、設定を管理する。
 - 各バスに `CAN0`、`CAN1`、`CAN2` のような論理名を割り当てる。

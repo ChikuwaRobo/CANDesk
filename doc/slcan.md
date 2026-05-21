@@ -4,7 +4,7 @@
 
 ## この文書の範囲
 
-この文書は slcan / LAWICEL 互換プロトコルに限定する。CANBlaster 全体では slcan 以外の USB-CAN アダプタ、SocketCAN / gs_usb、CAN FD も扱う。USB-CAN アダプタ全体の方針は [USB-CAN アダプタ対応方針](./usb-can-adapters.md) に記載する。
+この文書は slcan / LAWICEL 互換プロトコルに限定する。CANRush 全体では slcan 以外の USB-CAN アダプタ、SocketCAN / gs_usb、CAN FD も扱う。USB-CAN アダプタ全体の方針は [USB-CAN アダプタ対応方針](./usb-can-adapters.md) に記載する。
 
 標準的な slcan は Classical CAN を対象とし、CAN FD フレーム、DLC 9 以上、BRS、ESI は扱わない。独自拡張で CAN FD を扱うデバイスがある場合は、標準 slcan ではなく別 adapter profile として扱う。初期ターゲットの WeActStudio USB2CANFDV1 はこのケースに該当し、詳細は [WeActStudio USB2CANFDV1 対応メモ](./weact-usb2canfdv1.md) に記載する。
 
