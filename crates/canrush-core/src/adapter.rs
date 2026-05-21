@@ -101,7 +101,9 @@ impl WeActSerialAdapter {
             .open()?;
 
         send_command(&mut *port, "C\r", config.timeout, true)?;
-        send_command(&mut *port, "H0\r", config.timeout, false)?;
+        // The verified WeAct V1 SLCAN firmware already starts in ASCII mode and
+        // rejects H0. Sending H0 can also make later mode commands fail, so the
+        // initial implementation leaves enhanced-mode switching untouched.
         send_command(
             &mut *port,
             if config.listen_only { "M1\r" } else { "M0\r" },
