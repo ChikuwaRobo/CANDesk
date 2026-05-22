@@ -144,6 +144,11 @@ input {
   color: #245a7a;
 }
 
+.status-pill.connecting {
+  background: #fff2ce;
+  color: #7b5a0a;
+}
+
 .status-pill.error {
   background: #f7dfdf;
   color: #8a2c2c;

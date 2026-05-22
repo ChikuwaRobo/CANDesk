@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use crate::model::{CanFrame, FrameKey};
 
@@ -6,6 +7,7 @@ use crate::model::{CanFrame, FrameKey};
 pub struct LatestFrame {
     pub frame: CanFrame,
     pub receive_count: u64,
+    pub previous_timestamp_host: Option<SystemTime>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -19,12 +21,14 @@ impl LatestFrameState {
         self.frames
             .entry(key)
             .and_modify(|latest| {
+                latest.previous_timestamp_host = Some(latest.frame.timestamp_host);
                 latest.frame = frame.clone();
                 latest.receive_count += 1;
             })
             .or_insert(LatestFrame {
                 frame,
                 receive_count: 1,
+                previous_timestamp_host: None,
             });
     }
 

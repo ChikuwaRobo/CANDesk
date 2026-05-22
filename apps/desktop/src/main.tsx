@@ -32,7 +32,7 @@ type BusConfig = {
   bitrate: string;
   dataBitrate: string;
   listenOnly: boolean;
-  status: "idle" | "ready" | "connected" | "error";
+  status: "idle" | "ready" | "connecting" | "connected" | "error";
   frames: number;
   errors: number;
 };
@@ -42,6 +42,7 @@ type LatestFrame = {
   id: string;
   idFormat: string;
   frameFormat: string;
+  frameType: string;
   dlc: number;
   length: number;
   data: string;
@@ -49,6 +50,37 @@ type LatestFrame = {
   lastSeen: string;
   rateHz: string;
   count: number;
+  raw: string;
+};
+
+type BusStatusDto = {
+  bus: string;
+  status: BusConfig["status"] | "connecting";
+  frames: number;
+  errors: number;
+  message: string;
+};
+
+type LatestFrameDto = {
+  bus: string;
+  id: string;
+  id_format: string;
+  frame_format: string;
+  frame_type: string;
+  dlc: number;
+  length: number;
+  data: string;
+  flags: string;
+  last_seen: string;
+  rate_hz: string;
+  count: number;
+  raw: string;
+};
+
+type SnapshotDto = {
+  buses: BusStatusDto[];
+  frames: LatestFrameDto[];
+  event_log: string;
 };
 
 const initialBuses: BusConfig[] = [
@@ -91,6 +123,7 @@ const sampleFrames: LatestFrame[] = [
     id: "0x103",
     idFormat: "standard",
     frameFormat: "classic",
+    frameType: "data",
     dlc: 8,
     length: 8,
     data: "0000000000000000",
@@ -98,12 +131,14 @@ const sampleFrames: LatestFrame[] = [
     lastSeen: "停止中",
     rateHz: "-",
     count: 0,
+    raw: "",
   },
   {
     bus: "CAN1",
     id: "0x110",
     idFormat: "standard",
     frameFormat: "classic",
+    frameType: "data",
     dlc: 8,
     length: 8,
     data: "0101C80000000000",
@@ -111,8 +146,31 @@ const sampleFrames: LatestFrame[] = [
     lastSeen: "停止中",
     rateHz: "-",
     count: 0,
+    raw: "",
   },
 ];
+
+function hasTauriRuntime() {
+  return Boolean(window.__TAURI_INTERNALS__);
+}
+
+function mapSnapshotFrame(frame: LatestFrameDto): LatestFrame {
+  return {
+    bus: frame.bus,
+    id: frame.id,
+    idFormat: frame.id_format,
+    frameFormat: frame.frame_format,
+    frameType: frame.frame_type,
+    dlc: frame.dlc,
+    length: frame.length,
+    data: frame.data,
+    flags: frame.flags,
+    lastSeen: frame.last_seen,
+    rateHz: frame.rate_hz,
+    count: frame.count,
+    raw: frame.raw,
+  };
+}
 
 function App() {
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
@@ -122,6 +180,7 @@ function App() {
   const [busFilter, setBusFilter] = React.useState("ALL");
   const [query, setQuery] = React.useState("");
   const [paused, setPaused] = React.useState(false);
+  const [connected, setConnected] = React.useState(false);
   const [eventLog, setEventLog] = React.useState("GUI skeleton ready");
 
   const selectedFrame =
@@ -140,7 +199,7 @@ function App() {
         : previewPorts;
       setPorts(listed);
       setEventLog(
-        window.__TAURI_INTERNALS__
+        hasTauriRuntime()
           ? `${listed.length} serial port(s) detected`
           : "browser preview mode; using sample serial ports",
       );
@@ -155,32 +214,76 @@ function App() {
     }
   }
 
-  function markConnected() {
-    setBuses((current) =>
-      current.map((bus) => ({
-        ...bus,
-        status: bus.port ? "connected" : "error",
-        frames: bus.port ? bus.frames : 0,
-        errors: bus.port ? bus.errors : bus.errors + 1,
-      })),
-    );
-    setFrames((current) =>
-      current.map((frame, index) => ({
-        ...frame,
-        lastSeen: index === 0 ? "now" : "now - 40 ms",
-        rateHz: index === 0 ? "4307.5" : "5503.5",
-        count: index === 0 ? 8622 : 11007,
-      })),
-    );
-    setEventLog("connection state mocked; adapter streaming will be wired next");
+  async function connectAll() {
+    if (!hasTauriRuntime()) {
+      setConnected(true);
+      setBuses((current) =>
+        current.map((bus) => ({
+          ...bus,
+          status: bus.port ? "connected" : "error",
+          frames: bus.port ? bus.frames : 0,
+          errors: bus.port ? bus.errors : bus.errors + 1,
+        })),
+      );
+      setFrames((current) =>
+        current.map((frame, index) => ({
+          ...frame,
+          lastSeen: index === 0 ? "now" : "now - 40 ms",
+          rateHz: index === 0 ? "4307.5" : "5503.5",
+          count: index === 0 ? 8622 : 11007,
+        })),
+      );
+      setEventLog("browser preview mode; connection state is simulated");
+      return;
+    }
+
+    try {
+      for (const bus of buses) {
+        if (!bus.port) {
+          throw new Error(`${bus.bus} port is not selected`);
+        }
+        await invoke("connect_bus", {
+          config: {
+            bus: bus.bus,
+            port: bus.port,
+            bitrate: bus.bitrate,
+            data_bitrate: bus.dataBitrate,
+            listen_only: bus.listenOnly,
+          },
+        });
+      }
+      setConnected(true);
+      setEventLog("all buses connecting");
+    } catch (error) {
+      setEventLog(`connect failed: ${String(error)}`);
+    }
   }
 
-  function markDisconnected() {
+  async function disconnectAll() {
+    if (hasTauriRuntime()) {
+      try {
+        await invoke("disconnect_all");
+      } catch (error) {
+        setEventLog(`disconnect failed: ${String(error)}`);
+        return;
+      }
+    }
+    setConnected(false);
     setBuses((current) => current.map((bus) => ({ ...bus, status: "ready" })));
-    setFrames((current) =>
-      current.map((frame) => ({ ...frame, lastSeen: "停止中", rateHz: "-", count: 0 })),
-    );
     setEventLog("all buses disconnected");
+  }
+
+  async function clearView() {
+    if (hasTauriRuntime()) {
+      try {
+        await invoke("clear_latest");
+      } catch (error) {
+        setEventLog(`clear failed: ${String(error)}`);
+        return;
+      }
+    }
+    setFrames([]);
+    setEventLog("view cleared");
   }
 
   function updateBus(index: number, patch: Partial<BusConfig>) {
@@ -192,6 +295,51 @@ function App() {
   React.useEffect(() => {
     void refreshPorts();
   }, []);
+
+  React.useEffect(() => {
+    if (!hasTauriRuntime()) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(async () => {
+      try {
+        const snapshot = await invoke<SnapshotDto>("latest_snapshot");
+        setBuses((current) =>
+          current.map((bus) => {
+            const status = snapshot.buses.find((entry) => entry.bus === bus.bus);
+            if (!status) {
+              return bus;
+            }
+            return {
+              ...bus,
+              status: status.status,
+              frames: status.frames,
+              errors: status.errors,
+            };
+          }),
+        );
+        if (!paused) {
+          const nextFrames = snapshot.frames.map(mapSnapshotFrame);
+          setFrames(nextFrames);
+          if (nextFrames.length > 0) {
+            const selectedExists = nextFrames.some(
+              (frame) => `${frame.bus}-${frame.id}` === selectedFrameId,
+            );
+            if (!selectedExists) {
+              setSelectedFrameId(`${nextFrames[0].bus}-${nextFrames[0].id}`);
+            }
+          }
+        }
+        if (snapshot.event_log) {
+          setEventLog(snapshot.event_log);
+        }
+      } catch (error) {
+        setEventLog(`snapshot failed: ${String(error)}`);
+      }
+    }, 200);
+
+    return () => window.clearInterval(timer);
+  }, [paused, selectedFrameId]);
 
   return (
     <main className="app-shell">
@@ -205,11 +353,11 @@ function App() {
             <RefreshCw size={16} />
             Refresh
           </button>
-          <button type="button" onClick={markConnected} title="全バス接続">
+          <button type="button" onClick={connectAll} title="全バス接続">
             <Plug size={16} />
             Connect
           </button>
-          <button type="button" onClick={markDisconnected} title="全バス切断">
+          <button type="button" onClick={disconnectAll} title="全バス切断">
             <Unplug size={16} />
             Disconnect
           </button>
@@ -323,10 +471,7 @@ function App() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setFrames([]);
-                setEventLog("view cleared");
-              }}
+              onClick={clearView}
             >
               <Square size={16} />
               Clear
@@ -405,7 +550,7 @@ function App() {
             </div>
             <div>
               <span>Raw line</span>
-              <strong className="mono">pending adapter stream</strong>
+              <strong className="mono">{selectedFrame.raw || "-"}</strong>
             </div>
           </div>
         ) : (
@@ -415,7 +560,7 @@ function App() {
 
       <footer className="status-strip">
         <span>{eventLog}</span>
-        <span>{paused ? "display paused" : "display live"}</span>
+        <span>{paused ? "display paused" : connected ? "receiving" : "display live"}</span>
       </footer>
     </main>
   );

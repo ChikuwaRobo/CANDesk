@@ -502,6 +502,10 @@ GUI は最初から多機能にしない。まず、デバイス接続と受信�
 - バス名、CAN ID、frame format、data、受信回数、フレームレートを表示できる。
 - 高頻度受信時も、生フレームを全件 DOM に流さず、一定周期の差分更新にできる。
 
+読み取り専用 GUI の初期実装では、Tauri 側に `connect_bus`、`disconnect_bus`、`disconnect_all`、`latest_snapshot`、`clear_latest` のコマンドを用意した。`connect_bus` は WeAct 実 adapter を別スレッドで開き、`LatestFrameState` と bus 別カウンタを共有状態へ更新する。GUI は 200 ms 周期で `latest_snapshot` を取得し、受信処理そのものは止めずに表示だけを更新する。`LatestFrameState` は同じ集約キーの前回受信時刻も保持し、GUI の `Hz` 列は最新 2 回の受信間隔から概算する。既定値は実機確認済みの `CAN0=COM3`、`CAN1=COM85`、nominal bitrate `S8`、data bitrate `Y2`、listen-only 有効とする。
+
+ブラウザ単体で Vite preview を開いた場合は Tauri API がないため、GUI はサンプルポートとサンプルフレームで表示確認できるようにしている。実デバイスの接続、切断、受信は Tauri アプリ上でのみ行う。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。
