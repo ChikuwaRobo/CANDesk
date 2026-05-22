@@ -469,10 +469,7 @@ function App() {
               {paused ? <Activity size={16} /> : <CirclePause size={16} />}
               {paused ? "Resume" : "Pause"}
             </button>
-            <button
-              type="button"
-              onClick={clearView}
-            >
+            <button type="button" onClick={clearView}>
               <Square size={16} />
               Clear
             </button>
@@ -480,6 +477,19 @@ function App() {
 
           <div className="frame-table-wrap">
             <table className="frame-table">
+              <colgroup>
+                <col className="col-bus" />
+                <col className="col-id" />
+                <col className="col-id-format" />
+                <col className="col-frame" />
+                <col className="col-dlc" />
+                <col className="col-length" />
+                <col className="col-data" />
+                <col className="col-flags" />
+                <col className="col-last" />
+                <col className="col-rate" />
+                <col className="col-count" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Bus</th>

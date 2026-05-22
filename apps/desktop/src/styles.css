@@ -263,7 +263,9 @@ label {
 
 .frame-table {
   width: 100%;
+  min-width: 924px;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 13px;
 }
 
@@ -273,6 +275,8 @@ label {
   padding: 0 10px;
   border-bottom: 1px solid #e4ebed;
   text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -289,8 +293,65 @@ label {
   background: #dcecf7;
 }
 
+.frame-table .col-bus {
+  width: 60px;
+}
+
+.frame-table .col-id {
+  width: 76px;
+}
+
+.frame-table .col-id-format {
+  width: 82px;
+}
+
+.frame-table .col-frame {
+  width: 76px;
+}
+
+.frame-table .col-dlc,
+.frame-table .col-length {
+  width: 52px;
+}
+
+.frame-table .col-data {
+  width: 230px;
+}
+
+.frame-table .col-flags {
+  width: 64px;
+}
+
+.frame-table .col-last {
+  width: 92px;
+}
+
+.frame-table .col-rate {
+  width: 64px;
+}
+
+.frame-table .col-count {
+  width: 76px;
+}
+
+.frame-table th:nth-child(5),
+.frame-table th:nth-child(6),
+.frame-table th:nth-child(10),
+.frame-table th:nth-child(11),
+.frame-table td:nth-child(5),
+.frame-table td:nth-child(6),
+.frame-table td:nth-child(10),
+.frame-table td:nth-child(11) {
+  text-align: right;
+}
+
 .mono {
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.frame-table td.mono {
+  letter-spacing: 0;
 }
 
 .empty-table,
