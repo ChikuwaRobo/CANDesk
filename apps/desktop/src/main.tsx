@@ -42,6 +42,7 @@ type BusConfig = {
 };
 
 type LatestFrame = {
+  rowKey: string;
   bus: string;
   id: string;
   idFormat: string;
@@ -55,6 +56,16 @@ type LatestFrame = {
   rateHz: string;
   count: number;
   raw: string;
+  mergedDetails?: FrameDetail[];
+};
+
+type FrameDetail = {
+  bus: string;
+  data: string;
+  raw: string;
+  lastSeen: string;
+  rateHz: string;
+  count: number;
 };
 
 type BusStatusDto = {
@@ -137,6 +148,7 @@ const previewPorts: SerialPortInfo[] = [
 
 const sampleFrames: LatestFrame[] = [
   {
+    rowKey: "CAN0-standard-classic-data-0x103",
     bus: "CAN0",
     id: "0x103",
     idFormat: "standard",
@@ -152,6 +164,7 @@ const sampleFrames: LatestFrame[] = [
     raw: "",
   },
   {
+    rowKey: "CAN1-standard-classic-data-0x110",
     bus: "CAN1",
     id: "0x110",
     idFormat: "standard",
@@ -173,9 +186,11 @@ function hasTauriRuntime() {
 }
 
 function mapSnapshotFrame(frame: LatestFrameDto): LatestFrame {
+  const id = formatCanId(frame.id, frame.id_format);
   return {
+    rowKey: `${frame.bus}-${frame.id_format}-${frame.frame_format}-${frame.frame_type}-${id}`,
     bus: frame.bus,
-    id: frame.id,
+    id,
     idFormat: frame.id_format,
     frameFormat: frame.frame_format,
     frameType: frame.frame_type,
@@ -192,6 +207,12 @@ function mapSnapshotFrame(frame: LatestFrameDto): LatestFrame {
 
 function formatPayloadHex(data: string) {
   return data.match(/.{1,2}/g)?.join(" ") ?? "";
+}
+
+function formatCanId(id: string, idFormat: string) {
+  const width = idFormat === "extended" ? 8 : 3;
+  const value = Number.parseInt(id.replace(/^0x/i, ""), 16);
+  return `0x${value.toString(16).toUpperCase().padStart(width, "0")}`;
 }
 
 function parseCanId(id: string) {
@@ -216,28 +237,81 @@ function compareFrames(a: LatestFrame, b: LatestFrame, sortMode: SortMode) {
   );
 }
 
+function mergeFramesById(sourceFrames: LatestFrame[]) {
+  const merged = new Map<string, LatestFrame>();
+  for (const frame of sourceFrames) {
+    const key = `${frame.idFormat}-${frame.frameFormat}-${frame.frameType}-${frame.id}`;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, {
+        ...frame,
+        rowKey: `ALL-${key}`,
+        bus: "ALL",
+        mergedDetails: [toFrameDetail(frame)],
+      });
+      continue;
+    }
+
+    const frameIsNewer = Number.parseFloat(frame.lastSeen) > Number.parseFloat(current.lastSeen);
+    merged.set(key, {
+      ...(frameIsNewer ? frame : current),
+      rowKey: `ALL-${key}`,
+      bus: "ALL",
+      count: current.count + frame.count,
+      rateHz: sumNumericStrings(current.rateHz, frame.rateHz),
+      mergedDetails: [...(current.mergedDetails ?? []), toFrameDetail(frame)].sort((a, b) =>
+        a.bus.localeCompare(b.bus),
+      ),
+    });
+  }
+  return Array.from(merged.values());
+}
+
+function toFrameDetail(frame: LatestFrame): FrameDetail {
+  return {
+    bus: frame.bus,
+    data: frame.data,
+    raw: frame.raw,
+    lastSeen: frame.lastSeen,
+    rateHz: frame.rateHz,
+    count: frame.count,
+  };
+}
+
+function sumNumericStrings(left: string, right: string) {
+  const leftValue = Number.parseFloat(left);
+  const rightValue = Number.parseFloat(right);
+  if (Number.isNaN(leftValue) && Number.isNaN(rightValue)) {
+    return "-";
+  }
+  return `${((Number.isNaN(leftValue) ? 0 : leftValue) + (Number.isNaN(rightValue) ? 0 : rightValue)).toFixed(1)}`;
+}
+
 function App() {
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
   const [frames, setFrames] = React.useState(sampleFrames);
-  const [selectedFrameId, setSelectedFrameId] = React.useState("CAN0-0x103");
+  const [selectedFrameId, setSelectedFrameId] = React.useState(sampleFrames[0].rowKey);
   const [busFilter, setBusFilter] = React.useState("ALL");
   const [query, setQuery] = React.useState("");
   const [sortMode, setSortMode] = React.useState<SortMode>("bus");
+  const [mergeBuses, setMergeBuses] = React.useState(false);
   const [paused, setPaused] = React.useState(false);
   const [connected, setConnected] = React.useState(false);
   const [eventLog, setEventLog] = React.useState("GUI skeleton ready");
 
-  const selectedFrame =
-    frames.find((frame) => `${frame.bus}-${frame.id}` === selectedFrameId) ?? frames[0];
+  const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
 
-  const visibleFrames = frames
+  const visibleFrames = displayFrames
     .filter((frame) => {
-      const busMatches = busFilter === "ALL" || frame.bus === busFilter;
+      const busMatches = mergeBuses || busFilter === "ALL" || frame.bus === busFilter;
       const queryMatches = frame.id.toLowerCase().includes(query.toLowerCase());
       return busMatches && queryMatches;
     })
     .sort((a, b) => compareFrames(a, b, sortMode));
+
+  const selectedFrame =
+    displayFrames.find((frame) => frame.rowKey === selectedFrameId) ?? displayFrames[0];
 
   async function refreshPorts() {
     try {
@@ -387,10 +461,10 @@ function App() {
           setFrames(nextFrames);
           if (nextFrames.length > 0) {
             const selectedExists = nextFrames.some(
-              (frame) => `${frame.bus}-${frame.id}` === selectedFrameId,
+              (frame) => frame.rowKey === selectedFrameId,
             );
             if (!selectedExists) {
-              setSelectedFrameId(`${nextFrames[0].bus}-${nextFrames[0].id}`);
+              setSelectedFrameId(nextFrames[0].rowKey);
             }
           }
         }
@@ -537,6 +611,14 @@ function App() {
                 </button>
               ))}
             </div>
+            <label className="checkbox-line table-toggle">
+              <input
+                type="checkbox"
+                checked={mergeBuses}
+                onChange={(event) => setMergeBuses(event.target.checked)}
+              />
+              Merge buses
+            </label>
             <div className="segmented sort-segmented" role="group" aria-label="sort mode">
               {([
                 ["bus", "Bus"],
@@ -576,12 +658,7 @@ function App() {
               <colgroup>
                 <col className="col-bus" />
                 <col className="col-id" />
-                <col className="col-id-format" />
-                <col className="col-frame" />
-                <col className="col-dlc" />
-                <col className="col-length" />
                 <col className="col-data" />
-                <col className="col-flags" />
                 <col className="col-last" />
                 <col className="col-rate" />
                 <col className="col-count" />
@@ -590,12 +667,7 @@ function App() {
                 <tr>
                   <th>Bus</th>
                   <th>ID</th>
-                  <th>ID fmt</th>
-                  <th>Frame</th>
-                  <th>DLC</th>
-                  <th>Len</th>
                   <th>Data</th>
-                  <th>Flags</th>
                   <th>Last</th>
                   <th>Hz</th>
                   <th>Count</th>
@@ -603,21 +675,15 @@ function App() {
               </thead>
               <tbody>
                 {visibleFrames.map((frame) => {
-                  const rowId = `${frame.bus}-${frame.id}`;
                   return (
                     <tr
-                      key={rowId}
-                      className={selectedFrameId === rowId ? "selected" : ""}
-                      onClick={() => setSelectedFrameId(rowId)}
+                      key={frame.rowKey}
+                      className={selectedFrameId === frame.rowKey ? "selected" : ""}
+                      onClick={() => setSelectedFrameId(frame.rowKey)}
                     >
                       <td>{frame.bus}</td>
                       <td>{frame.id}</td>
-                      <td>{frame.idFormat}</td>
-                      <td>{frame.frameFormat}</td>
-                      <td>{frame.dlc}</td>
-                      <td>{frame.length}</td>
                       <td className="mono">{frame.data}</td>
-                      <td>{frame.flags || "-"}</td>
                       <td>{frame.lastSeen}</td>
                       <td>{frame.rateHz}</td>
                       <td>{frame.count.toLocaleString()}</td>
@@ -637,28 +703,44 @@ function App() {
           <h2>Detail</h2>
         </div>
         {selectedFrame ? (
-          <div className="detail-grid">
-            <div>
-              <span>Frame</span>
-              <strong>
-                {selectedFrame.bus} {selectedFrame.id}
-              </strong>
+          <>
+            <div className="detail-grid">
+              <div>
+                <span>Frame</span>
+                <strong>
+                  {selectedFrame.bus} {selectedFrame.id}
+                </strong>
+              </div>
+              <div>
+                <span>Payload</span>
+                <strong className="mono">{selectedFrame.data}</strong>
+              </div>
+              <div>
+                <span>Metadata</span>
+                <strong>
+                  {selectedFrame.frameFormat} / DLC {selectedFrame.dlc} / {selectedFrame.length}{" "}
+                  byte
+                </strong>
+              </div>
+              <div>
+                <span>Raw line</span>
+                <strong className="mono">{selectedFrame.raw || "-"}</strong>
+              </div>
             </div>
-            <div>
-              <span>Payload</span>
-              <strong className="mono">{selectedFrame.data}</strong>
-            </div>
-            <div>
-              <span>Metadata</span>
-              <strong>
-                {selectedFrame.frameFormat} / DLC {selectedFrame.dlc} / {selectedFrame.length} byte
-              </strong>
-            </div>
-            <div>
-              <span>Raw line</span>
-              <strong className="mono">{selectedFrame.raw || "-"}</strong>
-            </div>
-          </div>
+            {selectedFrame.mergedDetails && selectedFrame.mergedDetails.length > 1 ? (
+              <div className="merged-detail-list">
+                {selectedFrame.mergedDetails.map((detail) => (
+                  <div className="merged-detail-row" key={detail.bus}>
+                    <strong>{detail.bus}</strong>
+                    <span className="mono">{detail.data || "-"}</span>
+                    <span>{detail.rateHz} Hz</span>
+                    <span>{detail.count.toLocaleString()}</span>
+                    <span className="mono">{detail.raw || "-"}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
         ) : (
           <p className="empty-detail">Select a frame</p>
         )}

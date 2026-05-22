@@ -214,10 +214,14 @@ fn send_command(
 
     let deadline = Instant::now() + timeout;
     let mut byte = [0_u8; 1];
+    let mut saw_line_content = false;
     while Instant::now() < deadline {
         match port.read(&mut byte) {
             Ok(0) => {}
-            Ok(_) if byte[0] == b'\r' => return Ok(()),
+            Ok(_) if byte[0] == b'\r' && !saw_line_content => return Ok(()),
+            Ok(_) if byte[0] == b'\r' => {
+                saw_line_content = false;
+            }
             Ok(_) if byte[0] == 0x07 && allow_error => return Ok(()),
             Ok(_) if byte[0] == 0x07 => {
                 return Err(CanrushError::InvalidFrame(format!(
@@ -225,7 +229,7 @@ fn send_command(
                     command.trim_end()
                 )));
             }
-            Ok(_) => {}
+            Ok(_) => saw_line_content = true,
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
             Err(error) => return Err(error.into()),
         }

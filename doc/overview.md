@@ -491,6 +491,8 @@ WeActStudio USB2CANFDV1 SLCAN Firmware のソース確認で得た実装メモ�
 - `Source/Bsp/can.c` の silent mode は `FDCAN_MODE_BUS_MONITORING` で実装されており、CANRush の `--listen-only` は `M1` として扱う。
 - `Source/App/slcan.h` の `SLCAN_MTU` は CAN FD 64 byte payload を ASCII 表現できる大きさで、`1 + 8 + 1 + 128 + 1` を前提にしている。
 
+GUI の Connect で `CAN0` だけまれにエラーになる事象を確認した。CLI で `COM3` と `COM85` を交互に 20 回ずつ短時間接続した範囲では再現しなかったため、デバイス単体の恒常的な接続不良ではない可能性が高い。原因候補は、接続開始時に残っている受信フレーム行の終端 `\r` を、初期化コマンドの成功応答 `\r` と誤認することである。WeAct firmware はコマンド成功時に空の `\r`、受信フレーム時に `t... \r` や `d... \r` のような非空行を返す。CANRush ではコマンド応答待ちで非空行の `\r` を読み捨て、空行 `\r` だけを ACK として扱うようにした。
+
 ### 5. 読み取り専用 GUI
 
 GUI は最初から多機能にしない。まず、デバイス接続と受信一覧だけを Tauri 上に載せる。
@@ -514,9 +516,17 @@ Bus panel には各バスの使用率を `Load` として表示する。初期�
 
 GUI の表示更新は約 30 Hz、つまり 33 ms 周期で `latest_snapshot` を取得する。Data 列と Detail の payload は `00 00 00 00` のように 1 byte ごとのスペース区切りで表示する。
 
+受信データリストの行数が増えてもウィンドウ全体のサイズやページ全体のスクロール状態が変わらないようにする。アプリ全体は viewport 高さに固定し、受信データリストは `frame-table-wrap` の内側だけでスクロールさせる。Bus panel も独立してスクロールできるが、Latest frame table の行追加によって Detail panel や status strip が押し出されないようにする。
+
 Latest frame table は、`Bus`、`ID`、`Recent` の 3 種類で並び替えできる。`Bus` はバス名、CAN ID、フレーム形式の順、`ID` は CAN ID、バス名、フレーム形式の順、`Recent` は直近に受信した時刻の降順で表示する。
 
 CAN バス全体と各 CAN ID の `Hz` は、表示更新タイミングに依存させない。500 ms の固定 window で受信パケット数をカウントし、window が終わったらその window のカウントだけを履歴に残して次の window を開始する。周波数表示時は、現在進行中の window を含めず、過去 1 秒分の完了済み window のカウント合計を 1 秒で割った値を表示する。これにより、GUI が 30 Hz で更新されても、表示タイミングによって周波数計算の対象パケットが変わらないようにする。
+
+`Merge buses` を有効にすると、Latest frame table は CAN0/CAN1 を区別せず、`id_format + frame_format + frame_type + CAN ID` をキーにして表示上の行を統合する。内部の受信状態、bus 別カウンタ、bus 別負荷計算は分離したまま保持する。統合表示では Bus 列を `ALL` とし、Count と Hz は各バスの値を合算し、payload と最終受信時刻は最も新しいフレームを表示する。
+
+Merge 表示中に統合行を選択した場合、Detail panel は統合行全体の最新 payload だけでなく、必要に応じて CAN0/CAN1 それぞれの payload、Hz、Count、raw line も並べて表示する。表示上は統合しても、詳細確認時にどのバスの値か追跡できるようにする。
+
+Bus 設定は CAN FD 対応デバイスの設定をそのまま扱うため、data bitrate など FD 用項目を残す。一方、受信データリストは CAN 2.0 の監視を主眼にして、FD 専用の `Frame` と `Flags` 列は表示しない。CAN ID は標準 ID を 3 桁、拡張 ID を 8 桁の 0 埋め 16 進表記にすることで ID 表記だけで区別できるようにし、`ID fmt` 列も表示しない。DLC と Len は Data の byte 表示から読み取れるため、受信データリストでは表示しない。Detail panel では従来通り frame format、DLC、Len、raw line を表示する。内部データモデルと集約キーには `frame_format` と flags を残し、将来 CAN FD の詳細表示が必要になったときに復帰できるようにする。
 
 ### 6. 単発送信
 
