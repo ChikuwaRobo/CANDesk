@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 
 const LOAD_BUCKET_MS: f64 = 100.0;
 const LOAD_BUCKETS_1S: u64 = 10;
-const LOAD_BUCKETS_5S: u64 = 50;
 
 #[derive(Debug, Serialize)]
 struct SerialPortDto {
@@ -79,9 +78,11 @@ struct BusStats {
     status: String,
     frames: u64,
     errors: u64,
-    bitrate_bps: u32,
     started_at: Option<Instant>,
-    load_buckets: VecDeque<LoadBucket>,
+    current_load_bucket: Option<LoadBucket>,
+    completed_load_buckets: VecDeque<LoadBucket>,
+    completed_load_bucket_count: u64,
+    completed_load_occupied_ms: f64,
     rate_buckets: VecDeque<FrameRateBucket>,
     worst_saturated_1s_ms: f64,
     message: String,
@@ -94,14 +95,16 @@ struct LoadBucket {
 }
 
 impl BusStats {
-    fn connected(bitrate_bps: u32) -> Self {
+    fn connected() -> Self {
         Self {
             status: "connected".to_string(),
             frames: 0,
             errors: 0,
-            bitrate_bps,
             started_at: Some(Instant::now()),
-            load_buckets: VecDeque::new(),
+            current_load_bucket: None,
+            completed_load_buckets: VecDeque::new(),
+            completed_load_bucket_count: 0,
+            completed_load_occupied_ms: 0.0,
             rate_buckets: VecDeque::new(),
             worst_saturated_1s_ms: 0.0,
             message: "connected".to_string(),
@@ -109,27 +112,31 @@ impl BusStats {
     }
 
     fn utilization_percent(&self) -> String {
-        let Some(started_at) = self.started_at else {
+        if self.started_at.is_none() {
             return "-".to_string();
         };
-        if self.bitrate_bps == 0 {
+        if self.completed_load_bucket_count == 0 {
             return "-".to_string();
         }
-        let current_bucket = current_bucket_index(started_at);
-        let occupied_ms =
-            sum_recent_occupied_ms(&self.load_buckets, current_bucket, LOAD_BUCKETS_5S);
-        let window_ms = LOAD_BUCKET_MS * LOAD_BUCKETS_5S as f64;
-        format!("{:.1}", occupied_ms / window_ms * 100.0)
+        let measured_ms = LOAD_BUCKET_MS * self.completed_load_bucket_count as f64;
+        format!(
+            "{:.1}",
+            self.completed_load_occupied_ms / measured_ms * 100.0
+        )
     }
 
     fn saturated_last_1s_ms(&self) -> String {
         let Some(started_at) = self.started_at else {
             return "-".to_string();
         };
-        let current_bucket = current_bucket_index(started_at);
+        let current_bucket = current_load_bucket_index(started_at);
         format!(
             "{:.1}",
-            sum_recent_saturated_ms(&self.load_buckets, current_bucket, LOAD_BUCKETS_1S)
+            sum_recent_saturated_ms(
+                &self.completed_load_buckets,
+                current_bucket,
+                LOAD_BUCKETS_1S
+            )
         )
     }
 
@@ -151,30 +158,47 @@ impl BusStats {
         let Some(started_at) = self.started_at else {
             return;
         };
-        let current_bucket = current_bucket_index(started_at);
-        match self.load_buckets.back_mut() {
+        let current_bucket = current_load_bucket_index(started_at);
+        self.close_load_buckets_before(current_bucket);
+        match self.current_load_bucket.as_mut() {
             Some(bucket) if bucket.index == current_bucket => {
                 bucket.occupied_ms += occupied_ms;
             }
-            _ => self.load_buckets.push_back(LoadBucket {
-                index: current_bucket,
-                occupied_ms,
-            }),
+            _ => {
+                self.current_load_bucket = Some(LoadBucket {
+                    index: current_bucket,
+                    occupied_ms,
+                })
+            }
         }
+    }
 
-        while self
-            .load_buckets
-            .front()
-            .is_some_and(|bucket| bucket.index + LOAD_BUCKETS_5S < current_bucket)
-        {
-            self.load_buckets.pop_front();
+    fn close_load_buckets_before(&mut self, current_bucket: u64) {
+        let Some(mut bucket) = self.current_load_bucket.take() else {
+            return;
+        };
+        while bucket.index < current_bucket {
+            self.completed_load_occupied_ms += bucket.occupied_ms;
+            self.completed_load_bucket_count += 1;
+            self.completed_load_buckets.push_back(bucket.clone());
+            while self
+                .completed_load_buckets
+                .front()
+                .is_some_and(|front| front.index + LOAD_BUCKETS_1S < current_bucket)
+            {
+                self.completed_load_buckets.pop_front();
+            }
+            self.worst_saturated_1s_ms = self.worst_saturated_1s_ms.max(sum_recent_saturated_ms(
+                &self.completed_load_buckets,
+                bucket.index + 1,
+                LOAD_BUCKETS_1S,
+            ));
+            bucket = LoadBucket {
+                index: bucket.index + 1,
+                occupied_ms: 0.0,
+            };
         }
-
-        self.worst_saturated_1s_ms = self.worst_saturated_1s_ms.max(sum_recent_saturated_ms(
-            &self.load_buckets,
-            current_bucket,
-            LOAD_BUCKETS_1S,
-        ));
+        self.current_load_bucket = Some(bucket);
     }
 
     fn add_frame_rate_sample(&mut self, timestamp: SystemTime) {
@@ -262,9 +286,11 @@ fn connect_bus(
                 status: "connecting".to_string(),
                 frames: 0,
                 errors: 0,
-                bitrate_bps,
                 started_at: None,
-                load_buckets: VecDeque::new(),
+                current_load_bucket: None,
+                completed_load_buckets: VecDeque::new(),
+                completed_load_bucket_count: 0,
+                completed_load_occupied_ms: 0.0,
                 rate_buckets: VecDeque::new(),
                 worst_saturated_1s_ms: 0.0,
                 message: "opening adapter".to_string(),
@@ -283,7 +309,7 @@ fn connect_bus(
             }
         };
 
-        update_bus_connected(&shared, &worker_bus, bitrate_bps);
+        update_bus_connected(&shared, &worker_bus);
         while !worker_stop.load(Ordering::Relaxed) {
             match adapter.next_frame() {
                 Ok(Some(frame)) => {
@@ -294,7 +320,7 @@ fn connect_bus(
                         let stats = inner
                             .buses
                             .entry(worker_bus.clone())
-                            .or_insert_with(|| BusStats::connected(bitrate_bps));
+                            .or_insert_with(BusStats::connected);
                         stats.status = "connected".to_string();
                         stats.frames += 1;
                         stats.add_occupied_ms(occupied_ms);
@@ -308,7 +334,7 @@ fn connect_bus(
                         let stats = inner
                             .buses
                             .entry(worker_bus.clone())
-                            .or_insert_with(|| BusStats::connected(bitrate_bps));
+                            .or_insert_with(BusStats::connected);
                         stats.status = "error".to_string();
                         stats.errors += 1;
                         stats.message = error.to_string();
@@ -340,9 +366,11 @@ fn disconnect_bus(state: tauri::State<'_, ReceiverState>, bus: String) -> Result
             status: "ready".to_string(),
             frames: 0,
             errors: 0,
-            bitrate_bps: 0,
             started_at: None,
-            load_buckets: VecDeque::new(),
+            current_load_bucket: None,
+            completed_load_buckets: VecDeque::new(),
+            completed_load_bucket_count: 0,
+            completed_load_occupied_ms: 0.0,
             rate_buckets: VecDeque::new(),
             worst_saturated_1s_ms: 0.0,
             message: "disconnected".to_string(),
@@ -365,7 +393,10 @@ fn disconnect_all(state: tauri::State<'_, ReceiverState>) -> Result<(), String> 
         stats.status = "ready".to_string();
         stats.message = "disconnected".to_string();
         stats.started_at = None;
-        stats.load_buckets.clear();
+        stats.current_load_bucket = None;
+        stats.completed_load_buckets.clear();
+        stats.completed_load_bucket_count = 0;
+        stats.completed_load_occupied_ms = 0.0;
         stats.rate_buckets.clear();
     }
     inner.event_log = "all buses disconnected".to_string();
@@ -379,7 +410,10 @@ fn clear_latest(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
     for stats in inner.buses.values_mut() {
         stats.frames = 0;
         stats.errors = 0;
-        stats.load_buckets.clear();
+        stats.current_load_bucket = None;
+        stats.completed_load_buckets.clear();
+        stats.completed_load_bucket_count = 0;
+        stats.completed_load_occupied_ms = 0.0;
         stats.rate_buckets.clear();
         stats.worst_saturated_1s_ms = 0.0;
         if stats.status == "connected" {
@@ -392,7 +426,12 @@ fn clear_latest(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
 
 #[tauri::command]
 fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto, String> {
-    let inner = state.inner.lock().map_err(|error| error.to_string())?;
+    let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+    for stats in inner.buses.values_mut() {
+        if let Some(started_at) = stats.started_at {
+            stats.close_load_buckets_before(current_load_bucket_index(started_at));
+        }
+    }
     let mut buses = inner
         .buses
         .iter()
@@ -452,11 +491,9 @@ fn stop_bus(shared: &Arc<Mutex<ReceiverInner>>, bus: &str) {
     }
 }
 
-fn update_bus_connected(shared: &Arc<Mutex<ReceiverInner>>, bus: &str, bitrate_bps: u32) {
+fn update_bus_connected(shared: &Arc<Mutex<ReceiverInner>>, bus: &str) {
     if let Ok(mut inner) = shared.lock() {
-        inner
-            .buses
-            .insert(bus.to_string(), BusStats::connected(bitrate_bps));
+        inner.buses.insert(bus.to_string(), BusStats::connected());
         inner.event_log = format!("{bus} connected");
     }
 }
@@ -513,20 +550,8 @@ fn format_completed_window_rate_hz(buckets: &VecDeque<FrameRateBucket>) -> Strin
     format!("{:.1}", count as f64 / window_seconds)
 }
 
-fn current_bucket_index(started_at: Instant) -> u64 {
+fn current_load_bucket_index(started_at: Instant) -> u64 {
     (started_at.elapsed().as_millis() as u64) / LOAD_BUCKET_MS as u64
-}
-
-fn sum_recent_occupied_ms(
-    buckets: &VecDeque<LoadBucket>,
-    current_bucket: u64,
-    bucket_count: u64,
-) -> f64 {
-    buckets
-        .iter()
-        .filter(|bucket| bucket.index + bucket_count > current_bucket)
-        .map(|bucket| bucket.occupied_ms)
-        .sum()
 }
 
 fn sum_recent_saturated_ms(
