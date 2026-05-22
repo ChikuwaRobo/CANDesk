@@ -35,6 +35,10 @@ type BusConfig = {
   status: "idle" | "ready" | "connecting" | "connected" | "error";
   frames: number;
   errors: number;
+  rateHz: string;
+  utilizationPercent: string;
+  saturatedLast1sMs: string;
+  saturatedWorst1sMs: string;
 };
 
 type LatestFrame = {
@@ -58,6 +62,10 @@ type BusStatusDto = {
   status: BusConfig["status"] | "connecting";
   frames: number;
   errors: number;
+  rate_hz: string;
+  utilization_percent: string;
+  saturated_last_1s_ms: string;
+  saturated_worst_1s_ms: string;
   message: string;
 };
 
@@ -83,6 +91,8 @@ type SnapshotDto = {
   event_log: string;
 };
 
+type SortMode = "id" | "bus" | "recent";
+
 const initialBuses: BusConfig[] = [
   {
     bus: "CAN0",
@@ -93,6 +103,10 @@ const initialBuses: BusConfig[] = [
     status: "idle",
     frames: 0,
     errors: 0,
+    rateHz: "-",
+    utilizationPercent: "-",
+    saturatedLast1sMs: "-",
+    saturatedWorst1sMs: "-",
   },
   {
     bus: "CAN1",
@@ -103,6 +117,10 @@ const initialBuses: BusConfig[] = [
     status: "idle",
     frames: 0,
     errors: 0,
+    rateHz: "-",
+    utilizationPercent: "-",
+    saturatedLast1sMs: "-",
+    saturatedWorst1sMs: "-",
   },
 ];
 
@@ -126,7 +144,7 @@ const sampleFrames: LatestFrame[] = [
     frameType: "data",
     dlc: 8,
     length: 8,
-    data: "0000000000000000",
+    data: "00 00 00 00 00 00 00 00",
     flags: "",
     lastSeen: "停止中",
     rateHz: "-",
@@ -141,7 +159,7 @@ const sampleFrames: LatestFrame[] = [
     frameType: "data",
     dlc: 8,
     length: 8,
-    data: "0101C80000000000",
+    data: "01 01 C8 00 00 00 00 00",
     flags: "",
     lastSeen: "停止中",
     rateHz: "-",
@@ -163,13 +181,39 @@ function mapSnapshotFrame(frame: LatestFrameDto): LatestFrame {
     frameType: frame.frame_type,
     dlc: frame.dlc,
     length: frame.length,
-    data: frame.data,
+    data: formatPayloadHex(frame.data),
     flags: frame.flags,
     lastSeen: frame.last_seen,
     rateHz: frame.rate_hz,
     count: frame.count,
     raw: frame.raw,
   };
+}
+
+function formatPayloadHex(data: string) {
+  return data.match(/.{1,2}/g)?.join(" ") ?? "";
+}
+
+function parseCanId(id: string) {
+  return Number.parseInt(id.replace(/^0x/i, ""), 16);
+}
+
+function compareFrames(a: LatestFrame, b: LatestFrame, sortMode: SortMode) {
+  if (sortMode === "recent") {
+    return Number.parseFloat(b.lastSeen) - Number.parseFloat(a.lastSeen);
+  }
+  if (sortMode === "bus") {
+    return (
+      a.bus.localeCompare(b.bus) ||
+      parseCanId(a.id) - parseCanId(b.id) ||
+      a.frameFormat.localeCompare(b.frameFormat)
+    );
+  }
+  return (
+    parseCanId(a.id) - parseCanId(b.id) ||
+    a.bus.localeCompare(b.bus) ||
+    a.frameFormat.localeCompare(b.frameFormat)
+  );
 }
 
 function App() {
@@ -179,6 +223,7 @@ function App() {
   const [selectedFrameId, setSelectedFrameId] = React.useState("CAN0-0x103");
   const [busFilter, setBusFilter] = React.useState("ALL");
   const [query, setQuery] = React.useState("");
+  const [sortMode, setSortMode] = React.useState<SortMode>("bus");
   const [paused, setPaused] = React.useState(false);
   const [connected, setConnected] = React.useState(false);
   const [eventLog, setEventLog] = React.useState("GUI skeleton ready");
@@ -186,11 +231,13 @@ function App() {
   const selectedFrame =
     frames.find((frame) => `${frame.bus}-${frame.id}` === selectedFrameId) ?? frames[0];
 
-  const visibleFrames = frames.filter((frame) => {
-    const busMatches = busFilter === "ALL" || frame.bus === busFilter;
-    const queryMatches = frame.id.toLowerCase().includes(query.toLowerCase());
-    return busMatches && queryMatches;
-  });
+  const visibleFrames = frames
+    .filter((frame) => {
+      const busMatches = busFilter === "ALL" || frame.bus === busFilter;
+      const queryMatches = frame.id.toLowerCase().includes(query.toLowerCase());
+      return busMatches && queryMatches;
+    })
+    .sort((a, b) => compareFrames(a, b, sortMode));
 
   async function refreshPorts() {
     try {
@@ -223,6 +270,10 @@ function App() {
           status: bus.port ? "connected" : "error",
           frames: bus.port ? bus.frames : 0,
           errors: bus.port ? bus.errors : bus.errors + 1,
+          rateHz: bus.port ? "preview" : "-",
+          utilizationPercent: bus.port ? "preview" : "-",
+          saturatedLast1sMs: "-",
+          saturatedWorst1sMs: "-",
         })),
       );
       setFrames((current) =>
@@ -269,7 +320,16 @@ function App() {
       }
     }
     setConnected(false);
-    setBuses((current) => current.map((bus) => ({ ...bus, status: "ready" })));
+    setBuses((current) =>
+      current.map((bus) => ({
+        ...bus,
+        status: "ready",
+        rateHz: "-",
+        utilizationPercent: "-",
+        saturatedLast1sMs: "-",
+        saturatedWorst1sMs: "-",
+      })),
+    );
     setEventLog("all buses disconnected");
   }
 
@@ -315,6 +375,10 @@ function App() {
               status: status.status,
               frames: status.frames,
               errors: status.errors,
+              rateHz: status.rate_hz,
+              utilizationPercent: status.utilization_percent,
+              saturatedLast1sMs: status.saturated_last_1s_ms,
+              saturatedWorst1sMs: status.saturated_worst_1s_ms,
             };
           }),
         );
@@ -336,7 +400,7 @@ function App() {
       } catch (error) {
         setEventLog(`snapshot failed: ${String(error)}`);
       }
-    }, 200);
+    }, 33);
 
     return () => window.clearInterval(timer);
   }, [paused, selectedFrameId]);
@@ -438,6 +502,22 @@ function App() {
                   <dt>Errors</dt>
                   <dd>{bus.errors.toLocaleString()}</dd>
                 </div>
+                <div>
+                  <dt>Hz</dt>
+                  <dd>{bus.rateHz}</dd>
+                </div>
+                <div>
+                  <dt>Load</dt>
+                  <dd>{bus.utilizationPercent === "-" ? "-" : `${bus.utilizationPercent}%`}</dd>
+                </div>
+                <div>
+                  <dt>Full 1s</dt>
+                  <dd>{bus.saturatedLast1sMs === "-" ? "-" : `${bus.saturatedLast1sMs} ms`}</dd>
+                </div>
+                <div>
+                  <dt>Worst</dt>
+                  <dd>{bus.saturatedWorst1sMs === "-" ? "-" : `${bus.saturatedWorst1sMs} ms`}</dd>
+                </div>
               </dl>
             </article>
           ))}
@@ -454,6 +534,22 @@ function App() {
                   onClick={() => setBusFilter(value)}
                 >
                   {value}
+                </button>
+              ))}
+            </div>
+            <div className="segmented sort-segmented" role="group" aria-label="sort mode">
+              {([
+                ["bus", "Bus"],
+                ["id", "ID"],
+                ["recent", "Recent"],
+              ] as Array<[SortMode, string]>).map(([value, label]) => (
+                <button
+                  type="button"
+                  key={value}
+                  className={sortMode === value ? "active" : ""}
+                  onClick={() => setSortMode(value)}
+                >
+                  {label}
                 </button>
               ))}
             </div>

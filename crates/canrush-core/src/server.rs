@@ -1,13 +1,24 @@
 use std::collections::HashMap;
-use std::time::SystemTime;
+use std::collections::VecDeque;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::{CanFrame, FrameKey};
+
+pub const FRAME_RATE_BUCKET_MS: u64 = 500;
+pub const FRAME_RATE_WINDOW_BUCKETS: u64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct LatestFrame {
     pub frame: CanFrame,
     pub receive_count: u64,
     pub previous_timestamp_host: Option<SystemTime>,
+    pub rate_buckets: VecDeque<FrameRateBucket>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FrameRateBucket {
+    pub index: u64,
+    pub count: u64,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -24,11 +35,17 @@ impl LatestFrameState {
                 latest.previous_timestamp_host = Some(latest.frame.timestamp_host);
                 latest.frame = frame.clone();
                 latest.receive_count += 1;
+                latest.ingest_rate_bucket(frame.timestamp_host);
             })
-            .or_insert(LatestFrame {
-                frame,
-                receive_count: 1,
-                previous_timestamp_host: None,
+            .or_insert_with(|| {
+                let mut latest = LatestFrame {
+                    frame: frame.clone(),
+                    receive_count: 1,
+                    previous_timestamp_host: None,
+                    rate_buckets: VecDeque::new(),
+                };
+                latest.ingest_rate_bucket(frame.timestamp_host);
+                latest
             });
     }
 
@@ -43,6 +60,34 @@ impl LatestFrameState {
     pub fn values(&self) -> impl Iterator<Item = &LatestFrame> {
         self.frames.values()
     }
+}
+
+impl LatestFrame {
+    fn ingest_rate_bucket(&mut self, timestamp: SystemTime) {
+        let Some(index) = rate_bucket_index(timestamp) else {
+            return;
+        };
+        match self.rate_buckets.back_mut() {
+            Some(bucket) if bucket.index == index => bucket.count += 1,
+            _ => self
+                .rate_buckets
+                .push_back(FrameRateBucket { index, count: 1 }),
+        }
+        while self
+            .rate_buckets
+            .front()
+            .is_some_and(|bucket| bucket.index + FRAME_RATE_WINDOW_BUCKETS < index)
+        {
+            self.rate_buckets.pop_front();
+        }
+    }
+}
+
+fn rate_bucket_index(timestamp: SystemTime) -> Option<u64> {
+    timestamp
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| (duration.as_millis() as u64) / FRAME_RATE_BUCKET_MS)
 }
 
 #[derive(Debug, Default, Clone)]
