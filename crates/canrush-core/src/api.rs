@@ -35,6 +35,35 @@ pub struct ServerIdentityDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BusStatusDto {
+    pub bus: String,
+    pub adapter: String,
+    pub status: String,
+    pub frames: u64,
+    pub errors: u64,
+    pub port: Option<String>,
+    pub bitrate: Option<String>,
+    pub data_bitrate: Option<String>,
+    pub listen_only: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectBusRequest {
+    pub adapter: String,
+    pub port: Option<String>,
+    pub baud: Option<u32>,
+    pub bitrate: Option<String>,
+    pub data_bitrate: Option<String>,
+    pub listen_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerDiagnosticsDto {
+    pub diagnostics: Vec<DiagnosticEventDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamHelloDto {
     pub event: String,
     pub protocol_version: String,

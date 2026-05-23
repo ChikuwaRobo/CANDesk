@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use canrush_core::adapter::{
     list_serial_devices, FakeAdapter, FrameSource, WeActSerialAdapter, WeActSerialConfig,
 };
-use canrush_core::api::{FrameEventDto, ServerStatusDto};
+use canrush_core::api::{
+    BusStatusDto, ConnectBusRequest, FrameEventDto, ServerDiagnosticsDto, ServerStatusDto,
+};
 use canrush_core::capture::{
     capture_from_source, write_csv_file, CanIdFilter, CaptureOptions, CSV_HEADER,
 };
@@ -33,6 +35,7 @@ enum Commands {
     Check(Box<CheckArgs>),
     ListPorts,
     Server(Box<ServerArgs>),
+    Stats(StatsArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -121,6 +124,10 @@ struct ServerArgs {
 
 #[derive(Debug, Subcommand)]
 enum ServerCommand {
+    Buses(ServerBusesArgs),
+    Connect(ServerConnectArgs),
+    Diagnostics(ServerDiagnosticsArgs),
+    Disconnect(ServerDisconnectArgs),
     Status(ServerStatusArgs),
 }
 
@@ -128,6 +135,66 @@ enum ServerCommand {
 struct ServerStatusArgs {
     #[arg(long)]
     server: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+struct ServerBusesArgs {
+    #[arg(long)]
+    server: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+struct ServerDiagnosticsArgs {
+    #[arg(long)]
+    server: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+struct ServerDisconnectArgs {
+    #[arg(long)]
+    server: Option<String>,
+
+    #[arg(long)]
+    bus: String,
+}
+
+#[derive(Debug, Parser)]
+struct ServerConnectArgs {
+    #[arg(long)]
+    server: Option<String>,
+
+    #[arg(long)]
+    bus: String,
+
+    #[arg(long, value_enum, default_value_t = AdapterKind::Fake)]
+    adapter: AdapterKind,
+
+    #[arg(long)]
+    port: Option<String>,
+
+    #[arg(long, default_value_t = 1_000_000)]
+    baud: u32,
+
+    #[arg(long, default_value = "S4")]
+    bitrate: String,
+
+    #[arg(long, default_value = "Y2")]
+    data_bitrate: String,
+
+    #[arg(long)]
+    listen_only: bool,
+}
+
+#[derive(Debug, Parser)]
+struct StatsArgs {
+    #[arg(long)]
+    bus: Option<String>,
+
+    #[arg(long)]
+    all_buses: bool,
+
+    #[arg(long, default_value = "1s")]
+    duration: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -156,6 +223,7 @@ fn run() -> Result<()> {
         Commands::Check(args) => run_check(*args),
         Commands::ListPorts => run_list_ports(),
         Commands::Server(args) => run_server_command(*args, cli.server.as_deref()),
+        Commands::Stats(args) => run_stats(args, cli.server.as_deref()),
     }
 }
 
@@ -448,6 +516,39 @@ fn run_list_ports() -> Result<()> {
 
 fn run_server_command(args: ServerArgs, global_server: Option<&str>) -> Result<()> {
     match args.command {
+        ServerCommand::Buses(args) => {
+            let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
+            let buses = fetch_server_buses(&endpoint)?;
+            print_buses(&buses);
+            Ok(())
+        }
+        ServerCommand::Connect(args) => {
+            let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
+            let status = post_server_connect(&endpoint, &args)?;
+            print_bus(&status);
+            Ok(())
+        }
+        ServerCommand::Diagnostics(args) => {
+            let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
+            let diagnostics = fetch_server_diagnostics(&endpoint)?;
+            for diagnostic in diagnostics.diagnostics {
+                println!(
+                    "severity={} code={} bus={} dropped_count={} message={}",
+                    diagnostic.severity,
+                    diagnostic.code,
+                    diagnostic.bus.as_deref().unwrap_or("-"),
+                    diagnostic.dropped_count,
+                    diagnostic.message
+                );
+            }
+            Ok(())
+        }
+        ServerCommand::Disconnect(args) => {
+            let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
+            let status = post_server_disconnect(&endpoint, &args.bus)?;
+            print_bus(&status);
+            Ok(())
+        }
         ServerCommand::Status(args) => {
             let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
             let status = fetch_server_status(&endpoint)?;
@@ -460,6 +561,27 @@ fn run_server_command(args: ServerArgs, global_server: Option<&str>) -> Result<(
             Ok(())
         }
     }
+}
+
+fn run_stats(args: StatsArgs, global_server: Option<&str>) -> Result<()> {
+    let _duration = parse_duration(&args.duration)?;
+    let endpoint = resolve_server_endpoint(None, global_server)?;
+    let buses = fetch_server_buses(&endpoint)?;
+    for bus in buses {
+        if !args.all_buses
+            && args
+                .bus
+                .as_ref()
+                .is_some_and(|selected| selected != &bus.bus)
+        {
+            continue;
+        }
+        println!(
+            "bus={} status={} frames={} errors={} adapter={}",
+            bus.bus, bus.status, bus.frames, bus.errors, bus.adapter
+        );
+    }
+    Ok(())
 }
 
 fn resolve_server_endpoint(
@@ -476,14 +598,100 @@ fn resolve_server_endpoint(
 
 fn fetch_server_status(endpoint: &ServerEndpoint) -> Result<ServerStatusDto> {
     let url = format!("{}/api/v1/status", endpoint.http_base_url());
-    let response = reqwest::blocking::get(&url)
+    get_json(&url)
+}
+
+fn fetch_server_buses(endpoint: &ServerEndpoint) -> Result<Vec<BusStatusDto>> {
+    let url = format!("{}/api/v1/sessions/default/buses", endpoint.http_base_url());
+    get_json(&url)
+}
+
+fn fetch_server_diagnostics(endpoint: &ServerEndpoint) -> Result<ServerDiagnosticsDto> {
+    let url = format!(
+        "{}/api/v1/sessions/default/diagnostics",
+        endpoint.http_base_url()
+    );
+    get_json(&url)
+}
+
+fn post_server_connect(
+    endpoint: &ServerEndpoint,
+    args: &ServerConnectArgs,
+) -> Result<BusStatusDto> {
+    let url = format!(
+        "{}/api/v1/sessions/default/buses/{}/connect",
+        endpoint.http_base_url(),
+        args.bus
+    );
+    let request = ConnectBusRequest {
+        adapter: adapter_name(args.adapter).to_string(),
+        port: args.port.clone(),
+        baud: Some(args.baud),
+        bitrate: Some(args.bitrate.clone()),
+        data_bitrate: Some(args.data_bitrate.clone()),
+        listen_only: args.listen_only,
+    };
+    let response = reqwest::blocking::Client::new()
+        .post(&url)
+        .json(&request)
+        .send()
         .map_err(|error| CanrushError::InvalidArgument(format!("server unreachable: {error}")))?;
     let response = response.error_for_status().map_err(|error| {
-        CanrushError::InvalidArgument(format!("server status request failed: {error}"))
+        CanrushError::InvalidArgument(format!("server connect request failed: {error}"))
     })?;
     response
-        .json::<ServerStatusDto>()
-        .map_err(|error| CanrushError::InvalidArgument(format!("invalid server status: {error}")))
+        .json::<BusStatusDto>()
+        .map_err(|error| CanrushError::InvalidArgument(format!("invalid bus status: {error}")))
+}
+
+fn post_server_disconnect(endpoint: &ServerEndpoint, bus: &str) -> Result<BusStatusDto> {
+    let url = format!(
+        "{}/api/v1/sessions/default/buses/{bus}/disconnect",
+        endpoint.http_base_url()
+    );
+    let response = reqwest::blocking::Client::new()
+        .post(&url)
+        .send()
+        .map_err(|error| CanrushError::InvalidArgument(format!("server unreachable: {error}")))?;
+    let response = response.error_for_status().map_err(|error| {
+        CanrushError::InvalidArgument(format!("server disconnect request failed: {error}"))
+    })?;
+    response
+        .json::<BusStatusDto>()
+        .map_err(|error| CanrushError::InvalidArgument(format!("invalid bus status: {error}")))
+}
+
+fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T> {
+    let response = reqwest::blocking::get(url)
+        .map_err(|error| CanrushError::InvalidArgument(format!("server unreachable: {error}")))?;
+    let response = response.error_for_status().map_err(|error| {
+        CanrushError::InvalidArgument(format!("server request failed: {error}"))
+    })?;
+    response
+        .json::<T>()
+        .map_err(|error| CanrushError::InvalidArgument(format!("invalid server response: {error}")))
+}
+
+fn print_buses(buses: &[BusStatusDto]) {
+    for bus in buses {
+        print_bus(bus);
+    }
+}
+
+fn print_bus(bus: &BusStatusDto) {
+    println!(
+        "bus={} adapter={} status={} frames={} errors={} port={} bitrate={} data_bitrate={} listen_only={} message={}",
+        bus.bus,
+        bus.adapter,
+        bus.status,
+        bus.frames,
+        bus.errors,
+        bus.port.as_deref().unwrap_or("-"),
+        bus.bitrate.as_deref().unwrap_or("-"),
+        bus.data_bitrate.as_deref().unwrap_or("-"),
+        bus.listen_only,
+        bus.message,
+    );
 }
 
 fn adapter_name(adapter: AdapterKind) -> &'static str {

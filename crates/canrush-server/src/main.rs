@@ -2,18 +2,22 @@
 
 use std::net::SocketAddr;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use canrush_core::adapter::{FakeAdapter, FrameSource};
-use canrush_core::api::{FrameEventDto, ServerStatusDto, StreamHelloDto, DEFAULT_SESSION_ID};
+use canrush_core::adapter::{FakeAdapter, FrameSource, WeActSerialAdapter, WeActSerialConfig};
+use canrush_core::api::{
+    BusStatusDto, ConnectBusRequest, DiagnosticEventDto, FrameEventDto, ServerDiagnosticsDto,
+    ServerStatusDto, StreamHelloDto, DEFAULT_SESSION_ID,
+};
 use canrush_core::capture::CanIdFilter;
 use canrush_core::server::{FrameHub, FrameSubscription, SubscribeOptions};
 use clap::Parser;
@@ -39,12 +43,44 @@ struct AppState {
     started_at: SystemTime,
     read_only: bool,
     hub: Arc<Mutex<FrameHub>>,
-    stop_workers: Arc<AtomicBool>,
+    runtime: Arc<Mutex<ServerRuntime>>,
+    diagnostics: Arc<Mutex<Vec<DiagnosticEventDto>>>,
+}
+
+#[derive(Debug, Default)]
+struct ServerRuntime {
+    buses: std::collections::HashMap<String, BusRuntime>,
+}
+
+#[derive(Debug)]
+struct BusRuntime {
+    bus: String,
+    adapter: String,
+    status: String,
+    frames: Arc<AtomicU64>,
+    errors: Arc<AtomicU64>,
+    port: Option<String>,
+    bitrate: Option<String>,
+    data_bitrate: Option<String>,
+    listen_only: bool,
+    message: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
 }
 
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/status", get(status))
+        .route("/api/v1/sessions/default/buses", get(buses))
+        .route(
+            "/api/v1/sessions/default/buses/{bus}/connect",
+            post(connect_bus),
+        )
+        .route(
+            "/api/v1/sessions/default/buses/{bus}/disconnect",
+            post(disconnect_bus),
+        )
+        .route("/api/v1/sessions/default/diagnostics", get(diagnostics))
         .route("/api/v1/sessions/default/stream", get(stream))
         .with_state(state)
 }
@@ -55,6 +91,188 @@ async fn status(State(state): State<AppState>) -> Json<ServerStatusDto> {
 
 fn server_status(state: &AppState) -> ServerStatusDto {
     ServerStatusDto::new(&state.server_name, state.started_at, state.read_only)
+}
+
+async fn buses(State(state): State<AppState>) -> Result<Json<Vec<BusStatusDto>>, StatusCode> {
+    let runtime = state
+        .runtime
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(
+        runtime.buses.values().map(BusRuntime::status_dto).collect(),
+    ))
+}
+
+async fn diagnostics(
+    State(state): State<AppState>,
+) -> Result<Json<ServerDiagnosticsDto>, StatusCode> {
+    let diagnostics = state
+        .diagnostics
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ServerDiagnosticsDto {
+        diagnostics: diagnostics.clone(),
+    }))
+}
+
+async fn connect_bus(
+    State(state): State<AppState>,
+    Path(bus): Path<String>,
+    Json(request): Json<ConnectBusRequest>,
+) -> Result<Json<BusStatusDto>, (StatusCode, String)> {
+    let status = connect_bus_runtime(&state, bus, request)?;
+    Ok(Json(status))
+}
+
+async fn disconnect_bus(
+    State(state): State<AppState>,
+    Path(bus): Path<String>,
+) -> Result<Json<BusStatusDto>, (StatusCode, String)> {
+    let status = disconnect_bus_runtime(&state, &bus)?;
+    Ok(Json(status))
+}
+
+fn connect_bus_runtime(
+    state: &AppState,
+    bus: String,
+    request: ConnectBusRequest,
+) -> Result<BusStatusDto, (StatusCode, String)> {
+    if bus.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "bus is required".to_string()));
+    }
+    let _ = disconnect_bus_runtime(state, &bus);
+
+    let adapter = request.adapter.to_ascii_lowercase();
+    let frames = Arc::new(AtomicU64::new(0));
+    let errors = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = WorkerContext {
+        hub: Arc::clone(&state.hub),
+        diagnostics: Arc::clone(&state.diagnostics),
+        bus: bus.clone(),
+        frames: Arc::clone(&frames),
+        errors: Arc::clone(&errors),
+        stop: Arc::clone(&stop),
+    };
+    let handle = match adapter.as_str() {
+        "fake" => spawn_fake_bus_worker(worker).map_err(|message| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to start fake worker: {message}"),
+            )
+        })?,
+        "weact" => spawn_weact_bus_worker(worker, &request).map_err(|message| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("failed to start weact worker: {message}"),
+            )
+        })?,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unsupported adapter: {}", request.adapter),
+            ))
+        }
+    };
+
+    let runtime = BusRuntime {
+        bus: bus.clone(),
+        adapter,
+        status: "connected".to_string(),
+        frames,
+        errors,
+        port: request.port,
+        bitrate: request.bitrate,
+        data_bitrate: request.data_bitrate,
+        listen_only: request.listen_only,
+        message: "connected".to_string(),
+        stop,
+        handle: Some(handle),
+    };
+    let status = runtime.status_dto();
+    let mut server = state.runtime.lock().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "runtime lock failed".to_string(),
+        )
+    })?;
+    server.buses.insert(bus, runtime);
+    push_diagnostic(
+        &state.diagnostics,
+        DiagnosticEventDto::new(
+            "info",
+            "bus-connected",
+            "bus connected",
+            Some(status.bus.clone()),
+            0,
+        ),
+    );
+    Ok(status)
+}
+
+fn disconnect_bus_runtime(
+    state: &AppState,
+    bus: &str,
+) -> Result<BusStatusDto, (StatusCode, String)> {
+    let runtime = state
+        .runtime
+        .lock()
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "runtime lock failed".to_string(),
+            )
+        })?
+        .buses
+        .remove(bus);
+    let Some(mut runtime) = runtime else {
+        return Ok(BusStatusDto {
+            bus: bus.to_string(),
+            adapter: "-".to_string(),
+            status: "disconnected".to_string(),
+            frames: 0,
+            errors: 0,
+            port: None,
+            bitrate: None,
+            data_bitrate: None,
+            listen_only: false,
+            message: "not connected".to_string(),
+        });
+    };
+    runtime.stop.store(true, Ordering::Relaxed);
+    if let Some(handle) = runtime.handle.take() {
+        let _ = handle.join();
+    }
+    runtime.status = "disconnected".to_string();
+    runtime.message = "disconnected".to_string();
+    push_diagnostic(
+        &state.diagnostics,
+        DiagnosticEventDto::new(
+            "info",
+            "bus-disconnected",
+            "bus disconnected",
+            Some(runtime.bus.clone()),
+            0,
+        ),
+    );
+    Ok(runtime.status_dto())
+}
+
+impl BusRuntime {
+    fn status_dto(&self) -> BusStatusDto {
+        BusStatusDto {
+            bus: self.bus.clone(),
+            adapter: self.adapter.clone(),
+            status: self.status.clone(),
+            frames: self.frames.load(Ordering::Relaxed),
+            errors: self.errors.load(Ordering::Relaxed),
+            port: self.port.clone(),
+            bitrate: self.bitrate.clone(),
+            data_bitrate: self.data_bitrate.clone(),
+            listen_only: self.listen_only,
+            message: self.message.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,9 +327,6 @@ async fn handle_stream(mut socket: WebSocket, state: AppState, query: StreamQuer
     let subscription_id = subscription.id();
 
     loop {
-        if state.stop_workers.load(Ordering::Relaxed) {
-            break;
-        }
         if let Some(event) = subscription.try_recv() {
             let dto = FrameEventDto::from_frame(event.sequence, &event.frame);
             if send_json(&mut socket, &dto).await.is_err() {
@@ -147,26 +362,135 @@ fn subscribe_options_from_query(query: &StreamQuery) -> Result<SubscribeOptions,
     Ok(options)
 }
 
-fn spawn_fake_bus_worker(
+#[derive(Clone)]
+struct WorkerContext {
     hub: Arc<Mutex<FrameHub>>,
+    diagnostics: Arc<Mutex<Vec<DiagnosticEventDto>>>,
+    bus: String,
+    frames: Arc<AtomicU64>,
+    errors: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
-) -> Result<JoinHandle<()>, String> {
+}
+
+fn spawn_fake_bus_worker(context: WorkerContext) -> Result<JoinHandle<()>, String> {
     let frames = collect_fake_frames()?;
     Ok(thread::spawn(move || {
-        while !stop.load(Ordering::Relaxed) {
+        while !context.stop.load(Ordering::Relaxed) {
             for frame in &frames {
-                if stop.load(Ordering::Relaxed) {
+                if context.stop.load(Ordering::Relaxed) {
                     break;
                 }
                 let mut frame = frame.clone();
+                frame.bus = context.bus.clone();
                 frame.timestamp_host = SystemTime::now();
-                if let Ok(mut hub) = hub.lock() {
+                if let Ok(mut hub) = context.hub.lock() {
                     hub.publish(frame);
+                    context.frames.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    context.errors.fetch_add(1, Ordering::Relaxed);
+                    push_diagnostic(
+                        &context.diagnostics,
+                        DiagnosticEventDto::new(
+                            "error",
+                            "hub-lock",
+                            "failed to lock frame hub",
+                            Some(context.bus.clone()),
+                            0,
+                        ),
+                    );
                 }
                 thread::sleep(Duration::from_millis(20));
             }
         }
     }))
+}
+
+fn spawn_weact_bus_worker(
+    context: WorkerContext,
+    request: &ConnectBusRequest,
+) -> Result<JoinHandle<()>, String> {
+    let port_name = request
+        .port
+        .clone()
+        .ok_or_else(|| "port is required for weact adapter".to_string())?;
+    let config = WeActSerialConfig {
+        port_name,
+        baud_rate: request.baud.unwrap_or(1_000_000),
+        bus: context.bus.clone(),
+        nominal_bitrate: request.bitrate.clone().unwrap_or_else(|| "S4".to_string()),
+        data_bitrate: request
+            .data_bitrate
+            .clone()
+            .or_else(|| Some("Y2".to_string())),
+        listen_only: request.listen_only,
+        timeout: Duration::from_millis(200),
+    };
+    Ok(thread::spawn(move || {
+        let mut adapter = match WeActSerialAdapter::connect(config) {
+            Ok(adapter) => adapter,
+            Err(_) => {
+                context.errors.fetch_add(1, Ordering::Relaxed);
+                push_diagnostic(
+                    &context.diagnostics,
+                    DiagnosticEventDto::new(
+                        "error",
+                        "weact-connect",
+                        "failed to connect weact adapter",
+                        Some(context.bus.clone()),
+                        0,
+                    ),
+                );
+                return;
+            }
+        };
+        while !context.stop.load(Ordering::Relaxed) {
+            match adapter.next_frame() {
+                Ok(Some(mut frame)) => {
+                    frame.timestamp_host = SystemTime::now();
+                    if let Ok(mut hub) = context.hub.lock() {
+                        hub.publish(frame);
+                        context.frames.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        context.errors.fetch_add(1, Ordering::Relaxed);
+                        push_diagnostic(
+                            &context.diagnostics,
+                            DiagnosticEventDto::new(
+                                "error",
+                                "hub-lock",
+                                "failed to lock frame hub",
+                                Some(context.bus.clone()),
+                                0,
+                            ),
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    context.errors.fetch_add(1, Ordering::Relaxed);
+                    push_diagnostic(
+                        &context.diagnostics,
+                        DiagnosticEventDto::new(
+                            "error",
+                            "weact-receive",
+                            "weact receive error",
+                            Some(context.bus.clone()),
+                            0,
+                        ),
+                    );
+                    break;
+                }
+            }
+        }
+    }))
+}
+
+fn push_diagnostic(
+    diagnostics: &Arc<Mutex<Vec<DiagnosticEventDto>>>,
+    diagnostic: DiagnosticEventDto,
+) {
+    if let Ok(mut diagnostics) = diagnostics.lock() {
+        diagnostics.push(diagnostic);
+    }
 }
 
 fn collect_fake_frames() -> Result<Vec<canrush_core::model::CanFrame>, String> {
@@ -229,25 +553,42 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let hub = Arc::new(Mutex::new(FrameHub::default()));
-    let stop_workers = Arc::new(AtomicBool::new(false));
-    let fake_worker = spawn_fake_bus_worker(Arc::clone(&hub), Arc::clone(&stop_workers))
-        .map_err(std::io::Error::other)?;
     let state = AppState {
         server_name: cli.server_name,
         started_at: SystemTime::now(),
         read_only: cli.read_only,
-        hub,
-        stop_workers: Arc::clone(&stop_workers),
+        hub: Arc::new(Mutex::new(FrameHub::default())),
+        runtime: Arc::new(Mutex::new(ServerRuntime::default())),
+        diagnostics: Arc::new(Mutex::new(Vec::new())),
     };
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;
     println!("canrush-server listening on http://{}", cli.listen);
-    axum::serve(listener, app(state))
+    axum::serve(listener, app(state.clone()))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
-    stop_workers.store(true, Ordering::Relaxed);
-    let _ = fake_worker.join();
+    stop_all_workers(&state);
     Ok(())
+}
+
+fn stop_all_workers(state: &AppState) {
+    let runtimes = state
+        .runtime
+        .lock()
+        .ok()
+        .map(|mut runtime| {
+            runtime
+                .buses
+                .drain()
+                .map(|(_, bus)| bus)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for mut runtime in runtimes {
+        runtime.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = runtime.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 async fn shutdown_signal() {
@@ -268,7 +609,8 @@ mod tests {
             started_at: UNIX_EPOCH + Duration::from_millis(1234),
             read_only: true,
             hub: Arc::new(Mutex::new(FrameHub::default())),
-            stop_workers: Arc::new(AtomicBool::new(false)),
+            runtime: Arc::new(Mutex::new(ServerRuntime::default())),
+            diagnostics: Arc::new(Mutex::new(Vec::new())),
         };
 
         let status = server_status(&state);

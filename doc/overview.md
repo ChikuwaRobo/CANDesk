@@ -949,6 +949,10 @@ CSV 契約、`capture` filter、`check` コマンドが揃った後の直近実�
 
 さらに、server 起動時に fake bus worker thread を開始し、`FakeAdapter::sample()` から取得した frame を 20ms 間隔で `FrameHub` へ publish し続ける構成にした。WebSocket stream は接続時に fake frame を一括投入せず、live subscriber として待ち受ける。publish 時には `timestamp_host` を現在時刻に更新するため、Client mode capture の CSV でも連続した受信時刻を確認できる。実プロセス確認として、`canrush-server --listen 127.0.0.1:49004` と `canrush --server 127.0.0.1:49004 capture --all-buses --duration 2s --max-frames 4 --output target\client-capture-live-fake.csv` で 4 frame の live CSV 出力を確認した。
 
+CLI 完結で進める server 管理機能として、`GET /api/v1/sessions/default/buses`、`POST /api/v1/sessions/default/buses/{bus}/connect`、`POST /api/v1/sessions/default/buses/{bus}/disconnect`、`GET /api/v1/sessions/default/diagnostics` を追加した。`canrush server buses`、`canrush server connect`、`canrush server disconnect`、`canrush server diagnostics`、`canrush stats --server ...` から確認できる。server 起動時に worker を自動開始するのではなく、`connect` により bus worker を開始し、`disconnect` で停止する。fake adapter は自動テストと CLI 確認用、WeAct adapter は server 側 worker から `WeActSerialAdapter::connect` して `FrameHub` へ publish する構成にした。
+
+実プロセス確認では、`canrush-server --listen 127.0.0.1:49005` を起動し、`canrush server connect --server 127.0.0.1:49005 --bus CAN0 --adapter fake`、`canrush --server 127.0.0.1:49005 capture --bus CAN0 --duration 2s --max-frames 4 --output target\server-connect-capture.csv`、`canrush --server 127.0.0.1:49005 stats --bus CAN0 --duration 1s`、`canrush server diagnostics --server 127.0.0.1:49005`、`canrush server disconnect --server 127.0.0.1:49005 --bus CAN0` の一連が CLI だけで動作することを確認した。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。
