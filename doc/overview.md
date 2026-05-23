@@ -77,7 +77,7 @@ CLI は、用途に応じて次の 2 モードに分ける。この区別は、G
 | Standalone mode | CLI 単独で adapter を開く | CLI 引数で指定する | CLI process | 開発時 smoke test、server なしの緊急 capture |
 | Client mode | 起動済み `canrush-server` の stream を購読する | server 側の session 設定を使う | server process | 通常運用、GUI 表示中の capture、monitor、stats、Plot live 入力 |
 
-現段階で実装済みなのは Standalone mode である。Windows のシリアルポートは通常 1 process が排他的に open するため、GUI が `COM3` / `COM85` を open している間に Standalone mode の CLI が同じ port を open して capture することはできない。
+Standalone mode と Client mode の両方を扱う。Windows のシリアルポートは通常 1 process が排他的に open するため、通常運用では `canrush-server` が実デバイスを open し、GUI と CLI は同じ server stream を購読する。
 
 GUI と CLI を併用する場合、bus の接続設定は `canrush-server` 側で行う。GUI は server の設定・接続操作 UI として振る舞い、CLI は `--port`、`--bitrate`、`--data-bitrate`、`--listen-only` を指定せず、既存 session の `--bus`、filter、duration、output だけを指定する。CLI は device owner ではなく subscriber として振る舞う。
 
@@ -182,70 +182,17 @@ CLI capture の filter 強化として、`--id`、`--id-range`、`--max-frames`�
 
 CLI `check` は、指定 adapter の短時間接続診断として扱う。初期実装では adapter 名、bus、version、受信 frame 数、stop reason、status を出力する。fake adapter では `canrush check --adapter fake --bus CAN0 --duration 500ms --min-frames 1` により `status=ok` を確認する。WeAct 実機では `COM3` と `COM85` に対して `--bitrate S8 --data-bitrate Y2 --listen-only --duration 1s --min-frames 5` を実行し、どちらも 5 frame 受信して `status=ok` となることを確認した。`V` command の応答は受信負荷中に取得できない場合があるため、version は取得できた場合のみ表示し、取得できない場合は `-` とする。version 取得時は、残留 CAN frame 行を誤認しないよう、`V` で始まる応答だけを採用する。
 
-### GUI / CLI 併用仕様で明確にするべきこと
+### GUI / CLI 併用仕様
 
-Client mode の実装前に、次の点を決める必要がある。
-
-1. Core server の所在
-   - `canrush-server` は headless server process として独立させる。
-   - GUI は基本的に server とセットで使うが、server 単独でも起動できるようにする。
-   - GUI 起動時に server を自動起動するか、既存 server に接続するかは GUI 実装時に選べるようにする。
-
-2. IPC 方式
-   - 初期実装の transport は未決定とする。
-   - 将来 LAN 内の別 PC から GUI/CLI/Plot が接続できるよう、local-only IPC に閉じない。
-   - 候補は localhost/LAN TCP、HTTP/WebSocket、gRPC など。named pipe は Windows local-only 最適化としては候補だが、主設計にはしない。
-   - Plot App の live stream も同じ server endpoint から購読できる設計にする。
-   - GUI は Windows のみでよいが、CLI と `canrush-server` は Linux でも動作する余地を残す。特に server は Raspberry Pi 上で USB-CAN adapter を開き、同一 LAN 内の Windows GUI / CLI から接続できる構成を想定する。
-   - transport は、Windows GUI、Rust CLI、Linux/Raspberry Pi server の 3 者で同じ API を使えることを優先する。
-
-3. session discovery
-   - CLI は `--server local` または `--server host:port` のように明示 endpoint を受け取れるようにする。
-   - `local` の解決方法は transport と同時に決める。
-   - LAN discovery は後続対応とし、初期は明示 endpoint を優先する。
-   - default session はまず 1 つとし、複数 server / 複数 session 選択は後続対応にする。
-
-4. 権限と操作範囲
-   - 初期 Client mode は read-only とする。
-   - capture / stats / monitor / Plot live 購読のみを扱う。
-   - connect/disconnect/bitrate 変更は初期 Client mode では扱わない。
-   - GUI が server の設定 UI として接続設定を行い、CLI は同じ bus の設定を上書きしない。
-
-5. stream の開始点
-   - 初期 Client mode の capture は live のみとする。
-   - CLI コマンドが server に購読要求を送った後に届いた frame だけを保存する。
-   - server 側 ring buffer から過去 frame を含める機能は後続対応にする。
-
-6. backpressure と drop 方針
-   - server は受信処理を止めない。
-   - GUI はリアルタイム表示を優先し、表示限界を超えた frame drop を許容する。
-   - CLI capture はリアルタイム表示ではないため、drop をできるだけ小さくする。
-   - 初期方針は subscriber 種別ごとに queue 方針を分ける。GUI subscriber は小さめの bounded queue と latest state 優先、CLI capture subscriber は大きめの bounded queue と連続書き出し優先にする。
-   - それでも overflow した場合は dropped count を診断情報と capture summary に出す。
-
-7. timestamp と順序保証
-   - capture CSV の `timestamp_host` は server が frame を受け取った時刻を使う。
-   - GUI/CLI/Plot は表示用に独自の基準時刻 offset を持ってよい。例: capture 開始時刻を 0 秒として表示する。
-   - CSV 契約では絶対時刻を残し、相対時刻は viewer / plot 側の表示設定として扱う。
-   - 同一 timestamp の frame 順序を安定させるため、将来 stream sequence number を追加するか検討する。
-
-8. 終了理由とエラー表現
-   - Client mode の通常終了条件は duration または max frames とする。
-   - data size 上限も指定できるようにする。初期候補は `--max-bytes`。
-   - 基本的な error として、server unreachable、session not found、bus not found、permission denied、server disconnected、queue overflow を扱う。
-   - Standalone mode と Client mode で `source-ended` の意味が変わるため、Client mode では `server-disconnected`、`stream-closed`、`max-bytes-reached` などの終了理由を追加する。
-
-現段階で固める仕様は次の通り。
-
-- GUI が実デバイスを open している間、Standalone mode の CLI は同じ port を open しない。
-- GUI 併用時の CLI capture / stats / monitor は Client mode として実装する。
-- Client mode の CLI は、bus 接続設定を受け取るだけで変更しない。
+- GUI と CLI の併用時は `canrush-server` が実デバイスを open し、GUI と CLI は subscriber として同じ stream を購読する。
+- GUI 併用時の CLI capture / stats / monitor は Client mode として使う。
+- Client mode の通常操作では、CLI は bus 接続設定を上書きしない。接続・切断は `canrush server connect/disconnect` の明示的な管理コマンドとして扱う。
 - Client mode の capture 条件は、Standalone mode と同じ `bus`、ID filter、duration、max frames、include tx、output を使う。
-- Client mode の capture には data size 上限を追加できるようにする。
+- Client mode の capture には data size 上限として `--max-bytes` を使える。
 - 初期 Client mode は live frame のみを対象にし、過去 ring buffer の取得は後続対応にする。
 - GUI は drop 許容、CLI capture は drop 最小化を基本方針にする。
 - timestamp は server 側で付与し、GUI/CLI/Plot は表示用の相対時刻 offset を持ってよい。
-- Client mode の実装に入る前に、transport、session discovery、subscriber queue、終了理由を小さな fake stream test で決める。
+- capture CSV の終了理由には `duration-elapsed`、`max-frames-reached`、`max-bytes-reached`、`stream-closed` などを使う。
 
 ### Transport / discovery の決定方針
 
@@ -608,9 +555,7 @@ API は、制御系とストリーム系を分ける。
 - 制御系: デバイス一覧、接続、切断、状態取得、送信開始、送信停止、キャプチャ開始。
 - ストリーム系: 受信フレーム、送信イベント、状態イベント、キャプチャデータ。
 
-CLI はまず `canrush-core` をプロセス内 API として直接利用し、GUI なしで capture、接続診断、monitor/stats を実行できるようにする。複数クライアントが同じ実デバイスを同時利用する段階では、同じ core をローカルサーバー化し、デスクトップ GUI、CLI、Plot App がローカル HTTP、ローカル TCP、Unix domain socket / named pipe などで接続する方式を検討する。
-
-ただし、IPC 形式は早期に固定しすぎない。重要なのは、CLI、GUI、Plot App が同じ core のモデルとストリーム契約を使い、CAN デバイスへの直接アクセスをアプリケーション層へ漏らさないことである。
+通常運用では `canrush-server` を headless process として起動し、GUI、CLI、Plot App は HTTP / WebSocket API で接続する。CLI には adapter を直接開く Standalone mode も残すが、GUI 併用や複数 client 利用では Client mode を使う。
 
 ## 具体実装案
 
@@ -628,12 +573,11 @@ Rust を中核にする理由は次の通り。
 ```text
 crates/
   canrush-core/          # 共通データモデル、frame hub、capture、tx scheduler
-  canrush-adapter-slcan/ # 標準 slcan adapter
-  canrush-adapter-weact/ # WeActStudio USB2CANFDV1 adapter
   canrush-cli/           # capture/export CLI
+  canrush-server/        # headless server、HTTP / WebSocket API、bus worker
 apps/
   desktop/               # Tauri desktop app
-    src-tauri/           # Rust 側。core を起動し、GUI API を公開する
+    src-tauri/           # Rust 側。server API client と GUI API bridge
     src/                 # TypeScript GUI
 ```
 
@@ -675,13 +619,15 @@ status()
 
 GUI の送信パネル、GUI 内ログ、GUI キャプチャ操作は後続対応にする。まず CLI で capture、接続診断、短時間 monitor/stats を整備し、GUI はそれらで固めた core API と状態情報を表示する利用者として扱う。
 
-初期 CLI は `canrush capture` を中心に始め、続いて `list-ports`、`check`、`monitor`、`stats` を追加する。CLI は GUI なしで `canrush-core` を直接利用できることを優先する。将来、GUI と CLI が同じ実デバイスを同時利用する必要が出た段階で、ローカルサーバー接続へ拡張する。CLI の例は次の形にする。
+CLI は Standalone mode と Client mode の両方を持つ。単独の bring-up や緊急 capture では adapter を直接開き、GUI 併用や複数 client 利用では `canrush-server` に接続する。CLI の例は次の形にする。
 
 ```text
 canrush capture --duration 10s --bus CAN0 --output capture.csv
 canrush capture --duration 30s --all-buses --include-tx --output capture.csv
 canrush capture --duration 5s --all-buses --id 100 --id-range 200-20F --max-frames 1000 --output filtered.csv
 canrush check --adapter weact --port COM3 --bitrate S8 --listen-only
+canrush server connect --server local --bus CAN0 --adapter weact --port COM3 --bitrate S8 --listen-only
+canrush --server local capture --bus CAN0 --duration 10s --output capture.csv
 canrush monitor --duration 5s --all-buses
 canrush stats --duration 10s --all-buses
 ```
@@ -812,13 +758,13 @@ GUI は最初から多機能にしない。まず、デバイス接続と受信�
 - バス名、CAN ID、frame format、data、受信回数、フレームレートを表示できる。
 - 高頻度受信時も、生フレームを全件 DOM に流さず、一定周期の差分更新にできる。
 
-読み取り専用 GUI の初期実装では、Tauri 側に `connect_bus`、`disconnect_bus`、`disconnect_all`、`latest_snapshot`、`clear_latest` のコマンドを用意した。`connect_bus` は WeAct 実 adapter を別スレッドで開き、`LatestFrameState` と bus 別カウンタを共有状態へ更新する。GUI は 200 ms 周期で `latest_snapshot` を取得し、受信処理そのものは止めずに表示だけを更新する。`LatestFrameState` は同じ集約キーの前回受信時刻も保持し、GUI の `Hz` 列は最新 2 回の受信間隔から概算する。既定値は実機確認済みの `CAN0=COM3`、`CAN1=COM85`、nominal bitrate `S8`、data bitrate `Y2`、listen-only 有効とする。
+読み取り専用 GUI は `canrush-server` の client として動作する。Tauri 側には `connect_bus`、`disconnect_bus`、`disconnect_all`、`latest_snapshot`、`clear_latest` のコマンドを用意するが、実デバイスは Tauri backend ではなく server process が open する。GUI は WebSocket stream を購読して `LatestFrameState` を更新し、約 30 Hz で `latest_snapshot` を取得して表示だけを更新する。既定値は実機確認済みの `CAN0=COM3`、`CAN1=COM85`、nominal bitrate `S8`、data bitrate `Y2`、listen-only 有効とする。
 
-ブラウザ単体で Vite preview を開いた場合は Tauri API がないため、GUI はサンプルポートとサンプルフレームで表示確認できるようにしている。実デバイスの接続、切断、受信は Tauri アプリ上でのみ行う。
+ブラウザ単体で Vite preview を開いた場合は Tauri API がないため、GUI はサンプルポートとサンプルフレームで表示確認できるようにしている。実デバイスの接続、切断、受信は Tauri アプリと `canrush-server` の組み合わせで行う。
 
 受信一覧は、高頻度更新時にデータ長、受信回数、時刻文字列の桁数で列幅が変わらないように、`table-layout: fixed` と `colgroup` で列幅を固定する。Data 列は固定幅の monospace 表示にし、長い CAN FD payload はセル内で省略表示する。数値列は右寄せにして桁変化による視覚的な揺れを抑える。
 
-Bus panel には各バスの使用率を `Load` として表示する。初期実装では、受信フレームから概算ビット数を積算し、設定 nominal bitrate に対する使用率として表示する。概算は Classical CAN 2.0 と CAN FD の固定オーバーヘッド差、標準 ID と拡張 ID の差、payload の `data_length` を反映する。bit stuffing、再送、ACK 欠落、CAN FD の arbitration phase と data phase の速度差は含めず、運用中の相対的な負荷確認を目的とする。
+Bus panel には各バスの使用率を `Load` として表示する予定である。GUI server client 化後は、bus frame count / error count は server の `BusStatusDto` を基準にし、bus load、saturated time、bus 全体 Hz は server 側 stats DTO と統合するまで `-` として表示する。
 
 使用率は 100 ms 単位の固定 bucket に概算占有時間を積み上げる。進行中の bucket は表示計算に混ぜず、bucket が完了した時点でその区間の占有時間だけを履歴へ記録する。`Load` はデータ取得開始から現在までの完了済み bucket 全体、つまり総計測区間に対する平均使用率として表示する。各 bucket で占有時間が 100 ms を超えた分は、新たなパケットを入れる余地がない超過時間として扱う。GUI には直近 1 秒間の完了済み bucket における超過時間を `Full 1s`、データ取得開始以降の 1 秒窓ワースト値を `Worst` として表示する。これらは測定器由来の電気的な実測値ではなく、受信フレーム列から推定した占有時間である。
 
@@ -917,39 +863,16 @@ CLI 優先フェーズの完了条件は次のように定義する。
 
 この順序では、1 から 11 までが GUI/CLI 併用、プロッタ、外部ツールの土台になる。5 の live stream API 検討は、実 IPC を決める前に fake stream で購読と backpressure の仕様を固める段階である。GUI 表示の追従はその後に行い、送信系はさらに後ろへ回す。GUI 送信、定期送信、送信プリセット CSV は、CLI/core 送信検証が安定してから追加する。
 
-CSV 契約、`capture` filter、`check` コマンドが揃った後の直近実装候補は次の 4 つに絞る。
+Client mode と server 管理機能として、次を実装済みである。
 
-1. `ServerEndpoint` parser と CLI `--server` 引数の骨組み。
-2. `canrush-core::api` の DTO と JSON golden test。
-3. fake `FrameHub` subscriber と queue overflow test。
-4. `canrush-server` の `GET /api/v1/status` と `canrush server status --server ...`。
-
-この 4 つは実デバイス接続を server に移す前に完結できる。ここまでを固めると、Client mode capture、GUI の server 接続化、Plot live stream の実装範囲とテスト範囲が明確になる。
-
-上記 1 から 4 の CLI だけで確認できる骨組みとして、次を実装した。
-
-- `canrush-core::endpoint::ServerEndpoint` を追加し、`local`、`host:port`、`http://host:port`、`ws://host:port` を正規化する。
-- `canrush-core::api` を追加し、`ServerStatusDto`、`StreamHelloDto`、`FrameEventDto`、`DiagnosticEventDto` などの JSON DTO を定義した。`timestamp_host_unix_ns` は JSON number ではなく 10 進文字列で固定する。
-- `FrameHub` に subscriber を追加し、bus / CAN ID filter、unsubscribe、queue overflow の drop count を core の unit test で確認できるようにした。
-- `canrush-server` binary crate を追加し、`GET /api/v1/status` を提供する。default listen は `127.0.0.1:49000` とする。
-- `canrush-cli` に `--server` と `canrush server status --server ...` を追加した。`--server` 未指定時は `CANRUSH_SERVER`、それもなければ `local` に解決する。
-- この時点では Client mode capture 本体は未実装で、`canrush --server ... capture ...` は明示的にエラーにしていた。
-
-続けて、Client mode capture の最小実装として fake WebSocket stream を追加した。
-
-- `canrush-server` は `GET /api/v1/sessions/default/stream?kind=capture...` を WebSocket endpoint として公開する。
-- 現時点の stream source は実 adapter ではなく `FakeAdapter::sample()` である。実 bus worker / `FrameHub` subscriber への接続は次段階で行う。
-- WebSocket 接続直後に `hello` event を送り、その後 `frame` event を JSON message として送る。
-- stream query は `bus`、複数 `id`、複数 `id_range` を受け取る。
-- `canrush --server host:port capture ...` は WebSocket stream を購読し、server 側ではなく CLI 実行側の `--output` に CSV を書く。
-- Client mode capture の初期終了条件として `--duration`、`--max-frames`、`--max-bytes` を実装した。
-- 実プロセス確認として、`canrush-server --listen 127.0.0.1:49002` を起動し、`canrush --server 127.0.0.1:49002 capture --all-buses --duration 2s --max-frames 2 --output target\client-capture.csv` で 2 frame の CSV 出力を確認した。
-
-その後、WebSocket stream の送信元を直接 `FakeAdapter` から読む形ではなく、`FrameHub` subscriber 経由に変更した。現在は WebSocket 接続ごとに `FrameHub` へ subscribe し、fake frame を hub へ publish して、subscription から取り出した `SequencedFrame` を `frame` event として送る。これにより、次段階で fake publish 部分を実 bus worker へ置き換えるだけで、WebSocket / CLI capture 側の境界を維持できる。実プロセス確認として、`canrush-server --listen 127.0.0.1:49003` と `canrush --server 127.0.0.1:49003 capture --all-buses --duration 2s --max-frames 2 --output target\client-capture-hub.csv` で 2 frame の CSV 出力を確認した。
-
-さらに、server 起動時に fake bus worker thread を開始し、`FakeAdapter::sample()` から取得した frame を 20ms 間隔で `FrameHub` へ publish し続ける構成にした。WebSocket stream は接続時に fake frame を一括投入せず、live subscriber として待ち受ける。publish 時には `timestamp_host` を現在時刻に更新するため、Client mode capture の CSV でも連続した受信時刻を確認できる。実プロセス確認として、`canrush-server --listen 127.0.0.1:49004` と `canrush --server 127.0.0.1:49004 capture --all-buses --duration 2s --max-frames 4 --output target\client-capture-live-fake.csv` で 4 frame の live CSV 出力を確認した。
-
-CLI 完結で進める server 管理機能として、`GET /api/v1/sessions/default/buses`、`POST /api/v1/sessions/default/buses/{bus}/connect`、`POST /api/v1/sessions/default/buses/{bus}/disconnect`、`GET /api/v1/sessions/default/diagnostics` を追加した。`canrush server buses`、`canrush server connect`、`canrush server disconnect`、`canrush server diagnostics`、`canrush stats --server ...` から確認できる。server 起動時に worker を自動開始するのではなく、`connect` により bus worker を開始し、`disconnect` で停止する。fake adapter は自動テストと CLI 確認用、WeAct adapter は server 側 worker から `WeActSerialAdapter::connect` して `FrameHub` へ publish する構成にした。
+- `canrush-core::endpoint::ServerEndpoint` により、`local`、`host:port`、`http://host:port`、`ws://host:port` を正規化する。
+- `canrush-core::api` に `ServerStatusDto`、`BusStatusDto`、`StreamHelloDto`、`FrameEventDto`、`DiagnosticEventDto`、`StatsSampleDto` などの JSON DTO を置く。`timestamp_host_unix_ns` は JSON number ではなく 10 進文字列で固定する。
+- `FrameHub` は subscriber、bus / CAN ID filter、unsubscribe、queue overflow の drop count を扱う。
+- `canrush-server` は `GET /api/v1/status`、`GET /api/v1/sessions/default/buses`、`POST /api/v1/sessions/default/buses/{bus}/connect`、`POST /api/v1/sessions/default/buses/{bus}/disconnect`、`GET /api/v1/sessions/default/diagnostics`、`GET /api/v1/sessions/default/stream?kind=...` を提供する。
+- server は起動時に bus worker を自動開始せず、`connect` により fake または WeAct worker を開始し、`disconnect` で停止する。
+- `canrush --server ... capture ...` は WebSocket stream を購読し、server 側ではなく CLI 実行側の `--output` に CSV を書く。
+- Client mode capture の終了条件として `--duration`、`--max-frames`、`--max-bytes` を扱う。
+- `canrush server status`、`canrush server buses`、`canrush server connect`、`canrush server disconnect`、`canrush server diagnostics`、`canrush stats --server ...` は `--json` に対応する。
 
 実プロセス確認では、`canrush-server --listen 127.0.0.1:49005` を起動し、`canrush server connect --server 127.0.0.1:49005 --bus CAN0 --adapter fake`、`canrush --server 127.0.0.1:49005 capture --bus CAN0 --duration 2s --max-frames 4 --output target\server-connect-capture.csv`、`canrush --server 127.0.0.1:49005 stats --bus CAN0 --duration 1s`、`canrush server diagnostics --server 127.0.0.1:49005`、`canrush server disconnect --server 127.0.0.1:49005 --bus CAN0` の一連が CLI だけで動作することを確認した。
 
@@ -957,43 +880,9 @@ WeAct 実機でも server 経由の CLI 操作を確認した。`COM3` を `CAN0
 
 CLI の機械処理向け出力として、`canrush server status`、`canrush server buses`、`canrush server connect`、`canrush server disconnect`、`canrush server diagnostics`、`canrush stats --server ...` に `--json` を追加した。JSON は server API DTO をそのまま出力する。`stats --json` は、指定 duration の前後で取得した frame count から `delta_frames` と `rate_hz` を計算し、`StatsSampleDto` の配列として出力する。
 
-### GUI server client 化の実装予定
+### GUI server client 化
 
-GUI は次の順で、現在の Tauri backend 直接 adapter 接続から `canrush-server` client へ移行する。
-
-1. GUI 起動時の server 接続設定
-   - まずは `127.0.0.1:49000` を default endpoint とする。
-   - 既存 server に接続する。server がいない場合の自動起動は後続対応にする。
-   - `GET /api/v1/status` で protocol version と server name を表示する。
-
-2. bus 状態表示を server API へ置き換える。
-   - 既存 Tauri command の bus 状態を、`GET /api/v1/sessions/default/buses` の DTO に寄せる。
-   - GUI は `BusStatusDto` を表示するだけにし、worker lifecycle を持たない。
-   - この段階では受信一覧はまだ既存実装のままでもよいが、接続状態の source を server API に寄せる。
-
-3. connect / disconnect 操作を server API へ移す。
-   - GUI の Connect は `POST /api/v1/sessions/default/buses/{bus}/connect` を呼ぶ。
-   - Disconnect は `POST /api/v1/sessions/default/buses/{bus}/disconnect` を呼ぶ。
-   - Tauri backend が直接 `WeActSerialAdapter` を open する経路は削除または無効化する。
-
-4. 受信一覧を WebSocket stream へ移す。
-   - GUI は `GET /api/v1/sessions/default/stream?kind=gui` を購読する。
-   - GUI 側は受信した `frame` event から latest-frame table を更新する。
-   - 高頻度 frame は GUI 側で全件描画せず、既存と同じ 30Hz 表示更新に丸める。
-
-5. diagnostics / stats 表示を server DTO に寄せる。
-   - diagnostics は `GET /api/v1/sessions/default/diagnostics` を表示する。
-   - bus frame count / error count は `BusStatusDto` を基準にする。
-   - GUI 独自の集計は表示用の最小限に留める。
-
-6. GUI 起動時 server lifecycle の整理
-   - local server 自動起動、既存 server 接続、remote endpoint 指定を選べるようにする。
-   - 自動起動した server は GUI 終了時に停止する。
-   - remote server へ接続している場合、GUI 終了時に server を停止しない。
-
-GUI 移行時のテスト方針は、先に CLI / server API で動作を固定し、GUI は DTO 変換と表示更新だけを確認する。Tauri backend の役割は server process 管理と HTTP/WebSocket client に限定し、CAN adapter 制御を持たせない。
-
-今回の GUI server client 化では、Tauri backend が CAN adapter を直接 open する経路を削除し、GUI からの `connect_bus` / `disconnect_bus` / `disconnect_all` は `canrush-server` の HTTP API を呼ぶ形にした。受信フレームは `ws://127.0.0.1:49000/api/v1/sessions/default/stream?kind=gui` の WebSocket stream を購読し、Tauri backend 内の `LatestFrameState` へ取り込む。フロントエンドは従来通り約 30 Hz の `latest_snapshot` polling で表示するため、表示の更新頻度と受信処理の境界は分離したまま維持する。
+Tauri backend が CAN adapter を直接 open する経路は削除し、GUI からの `connect_bus` / `disconnect_bus` / `disconnect_all` は `canrush-server` の HTTP API を呼ぶ形にした。受信フレームは `ws://127.0.0.1:49000/api/v1/sessions/default/stream?kind=gui` の WebSocket stream を購読し、Tauri backend 内の `LatestFrameState` へ取り込む。フロントエンドは従来通り約 30 Hz の `latest_snapshot` polling で表示するため、表示の更新頻度と受信処理の境界は分離したまま維持する。
 
 GUI の既定 server endpoint は当面 `local`、つまり `127.0.0.1:49000` とする。server の自動起動、remote endpoint の選択、認証、GUI からの capture 操作は後続実装に回す。現段階の GUI は、起動済み server に対する接続設定 UI と受信 monitor UI として扱う。GUI process は実デバイスの owner にならないため、GUI 表示中でも CLI client mode capture が同じ server stream を購読できる。
 
@@ -1072,13 +961,9 @@ WeAct adapter の受信、送信、CLI、GUI が安定してから標準 slcan a
 
 実装前に確認したい点は次の通り。
 
-- 主な対象 OS は Windows のみか、Linux/macOS も対象にするか。
-- デスクトップアプリの実装技術を何にするか。
-- 初期対応は WeActStudio USB2CANFDV1 で進め、標準 slcan、gs_usb、SocketCAN、ベンダー SDK は後続対応にするか。
 - Windows で gs_usb 系デバイスを扱う場合、WinUSB/libusb で直接扱うか、別ドライバやライブラリを前提にするか。
 - Linux では SocketCAN 経由を基本にするか、gs_usb を直接 USB プロトコルとして扱う経路も用意するか。
-- 同時接続する CAN バス数は実用 2、最大 4 程度を前提にしてよいか。
 - 想定する最大 CAN フレームレート。
 - CAN FD の最大データレート、BRS の利用有無。
-- キャプチャには受信フレームだけを含めるか、送信フレームも含めるか。
+- キャプチャには送信フレームも含めるか。
 - 定期送信の最小周期と、安全上の上限をどの程度にするか。
