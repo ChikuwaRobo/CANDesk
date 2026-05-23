@@ -21,6 +21,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Capture(Box<CaptureArgs>),
+    Check(Box<CheckArgs>),
     ListPorts,
 }
 
@@ -69,6 +70,36 @@ struct CaptureArgs {
     listen_only: bool,
 }
 
+#[derive(Debug, Parser)]
+struct CheckArgs {
+    #[arg(long, value_enum, default_value_t = AdapterKind::Fake)]
+    adapter: AdapterKind,
+
+    #[arg(long)]
+    port: Option<String>,
+
+    #[arg(long, default_value_t = 1_000_000)]
+    baud: u32,
+
+    #[arg(long, default_value = "CAN0")]
+    bus: String,
+
+    #[arg(long, default_value = "S4")]
+    bitrate: String,
+
+    #[arg(long, default_value = "Y2")]
+    data_bitrate: String,
+
+    #[arg(long)]
+    listen_only: bool,
+
+    #[arg(long, default_value = "500ms")]
+    duration: String,
+
+    #[arg(long, default_value_t = 1)]
+    min_frames: usize,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum AdapterKind {
     Fake,
@@ -86,6 +117,7 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Capture(args) => run_capture(*args),
+        Commands::Check(args) => run_check(*args),
         Commands::ListPorts => run_list_ports(),
     }
 }
@@ -141,11 +173,76 @@ fn run_capture(args: CaptureArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_check(args: CheckArgs) -> Result<()> {
+    if args.min_frames == 0 {
+        return Err(CanrushError::InvalidArgument(
+            "--min-frames must be greater than 0".to_string(),
+        ));
+    }
+
+    let duration = parse_duration(&args.duration)?;
+    let mut version = None;
+    let mut source: Box<dyn FrameSource> = match args.adapter {
+        AdapterKind::Fake => Box::new(FakeAdapter::sample()?),
+        AdapterKind::Weact => {
+            let port_name = args.port.ok_or_else(|| {
+                CanrushError::InvalidArgument(
+                    "--port is required when --adapter weact is used".to_string(),
+                )
+            })?;
+            let adapter = WeActSerialAdapter::connect(WeActSerialConfig {
+                port_name,
+                baud_rate: args.baud,
+                bus: args.bus.clone(),
+                nominal_bitrate: args.bitrate,
+                data_bitrate: Some(args.data_bitrate),
+                listen_only: args.listen_only,
+                ..WeActSerialConfig::default()
+            })?;
+            version = adapter.version().map(ToOwned::to_owned);
+            Box::new(adapter)
+        }
+    };
+
+    let options = CaptureOptions {
+        duration,
+        bus: Some(args.bus.clone()),
+        include_tx: false,
+        id_filters: Vec::new(),
+        max_frames: Some(args.min_frames),
+    };
+    let result = capture_from_source(&mut *source, &options)?;
+    let ok = result.frames.len() >= args.min_frames;
+    println!("adapter={}", adapter_name(args.adapter));
+    println!("bus={}", args.bus);
+    println!("version={}", version.as_deref().unwrap_or("-"));
+    println!("frames={}", result.frames.len());
+    println!("stop_reason={}", result.stop_reason.as_str());
+    println!("status={}", if ok { "ok" } else { "no-frames" });
+
+    if ok {
+        Ok(())
+    } else {
+        Err(CanrushError::InvalidFrame(format!(
+            "received {} frame(s), expected at least {}",
+            result.frames.len(),
+            args.min_frames
+        )))
+    }
+}
+
 fn run_list_ports() -> Result<()> {
     for device in list_serial_devices()? {
         println!("{}\t{}", device.port_name, device.port_type);
     }
     Ok(())
+}
+
+fn adapter_name(adapter: AdapterKind) -> &'static str {
+    match adapter {
+        AdapterKind::Fake => "fake",
+        AdapterKind::Weact => "weact",
+    }
 }
 
 fn parse_duration(value: &str) -> Result<Duration> {

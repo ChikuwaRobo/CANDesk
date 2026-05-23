@@ -149,6 +149,8 @@ CLI capture の filter 強化として、`--id`、`--id-range`、`--max-frames`�
 
 実機確認では、WeActStudio USB2CANFDV1 が `COM3` と `COM85` として認識された。`COM3` を `CAN0`、`COM85` を `CAN1` とし、`--bitrate S8 --data-bitrate Y2 --listen-only` でそれぞれ 2 秒 capture したところ、どちらも `--max-frames 100` に到達して `max-frames-reached` で終了した。出力 CSV は 100 行で、header と `classic/data/8 byte` の frame 表記が期待通りであることを確認した。さらに `COM3` で実受信した ID `0x202` に対して `--id 202 --max-frames 10` を指定し、出力 10 行すべてが `0x202` であることを確認した。
 
+CLI `check` は、指定 adapter の短時間接続診断として扱う。初期実装では adapter 名、bus、version、受信 frame 数、stop reason、status を出力する。fake adapter では `canrush check --adapter fake --bus CAN0 --duration 500ms --min-frames 1` により `status=ok` を確認する。WeAct 実機では `COM3` と `COM85` に対して `--bitrate S8 --data-bitrate Y2 --listen-only --duration 1s --min-frames 5` を実行し、どちらも 5 frame 受信して `status=ok` となることを確認した。`V` command の応答は受信負荷中に取得できない場合があるため、version は取得できた場合のみ表示し、取得できない場合は `-` とする。version 取得時は、残留 CAN frame 行を誤認しないよう、`V` で始まる応答だけを採用する。
+
 ## GUI の機能
 
 初期 GUI は、リアルタイム観測を中心にする。

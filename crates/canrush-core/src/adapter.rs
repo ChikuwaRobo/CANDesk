@@ -87,6 +87,7 @@ pub struct WeActSerialAdapter {
     port: Box<dyn serialport::SerialPort>,
     bus: String,
     buffer: Vec<u8>,
+    version: Option<String>,
 }
 
 impl WeActSerialAdapter {
@@ -100,6 +101,7 @@ impl WeActSerialAdapter {
             .timeout(config.timeout)
             .open()?;
 
+        let version = query_command_line(&mut *port, "V\r", config.timeout, 'V').ok();
         send_command(&mut *port, "C\r", config.timeout, true)?;
         // The verified WeAct V1 SLCAN firmware already starts in ASCII mode and
         // rejects H0. Sending H0 can also make later mode commands fail, so the
@@ -131,7 +133,12 @@ impl WeActSerialAdapter {
             port,
             bus: config.bus,
             buffer: Vec::new(),
+            version,
         })
+    }
+
+    pub fn version(&self) -> Option<&str> {
+        self.version.as_deref()
     }
 
     pub fn capability() -> BusCapability {
@@ -230,6 +237,47 @@ fn send_command(
                 )));
             }
             Ok(_) => saw_line_content = true,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Err(CanrushError::InvalidFrame(format!(
+        "timeout waiting for command response: {}",
+        command.trim_end()
+    )))
+}
+
+fn query_command_line(
+    port: &mut dyn serialport::SerialPort,
+    command: &str,
+    timeout: Duration,
+    expected_prefix: char,
+) -> Result<String> {
+    port.write_all(command.as_bytes())?;
+    port.flush()?;
+
+    let deadline = Instant::now() + timeout;
+    let mut line = Vec::new();
+    let mut byte = [0_u8; 1];
+    while Instant::now() < deadline {
+        match port.read(&mut byte) {
+            Ok(0) => {}
+            Ok(_) if byte[0] == b'\r' => {
+                let response = String::from_utf8(std::mem::take(&mut line)).map_err(|_| {
+                    CanrushError::InvalidFrame("command response is not UTF-8".to_string())
+                })?;
+                if response.starts_with(expected_prefix) {
+                    return Ok(response);
+                }
+            }
+            Ok(_) if byte[0] == 0x07 => {
+                return Err(CanrushError::InvalidFrame(format!(
+                    "device rejected command {}",
+                    command.trim_end()
+                )));
+            }
+            Ok(_) => line.push(byte[0]),
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
             Err(error) => return Err(error.into()),
         }
