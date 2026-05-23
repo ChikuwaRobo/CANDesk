@@ -953,6 +953,8 @@ CLI 完結で進める server 管理機能として、`GET /api/v1/sessions/defa
 
 実プロセス確認では、`canrush-server --listen 127.0.0.1:49005` を起動し、`canrush server connect --server 127.0.0.1:49005 --bus CAN0 --adapter fake`、`canrush --server 127.0.0.1:49005 capture --bus CAN0 --duration 2s --max-frames 4 --output target\server-connect-capture.csv`、`canrush --server 127.0.0.1:49005 stats --bus CAN0 --duration 1s`、`canrush server diagnostics --server 127.0.0.1:49005`、`canrush server disconnect --server 127.0.0.1:49005 --bus CAN0` の一連が CLI だけで動作することを確認した。
 
+WeAct 実機でも server 経由の CLI 操作を確認した。`COM3` を `CAN0`、`COM85` を `CAN1` とし、`canrush server connect --adapter weact --bitrate S8 --data-bitrate Y2 --listen-only`、`canrush --server ... capture`、`canrush --server ... stats`、`canrush server diagnostics`、`canrush server disconnect` が動作する。単独 bus では `target\server-weact-com3-can0.csv` と `target\server-weact-com85-can1.csv` にそれぞれ 20 frame を保存できた。さらに同一 server process で `CAN0=COM3` と `CAN1=COM85` を同時 connect し、`canrush --server 127.0.0.1:49008 capture --all-buses --duration 2s --max-frames 40 --output target\server-weact-all-buses.csv` により両 bus 混在の CSV 出力を確認した。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。

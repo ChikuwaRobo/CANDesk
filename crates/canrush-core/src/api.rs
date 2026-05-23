@@ -245,4 +245,26 @@ mod tests {
             r#"{"event":"diagnostic","severity":"warn","code":"queue-overflow","message":"subscriber queue overflow","bus":null,"dropped_count":3}"#
         );
     }
+
+    #[test]
+    fn serializes_bus_status_contract() {
+        let status = BusStatusDto {
+            bus: "CAN0".to_string(),
+            adapter: "weact".to_string(),
+            status: "connected".to_string(),
+            frames: 123,
+            errors: 0,
+            port: Some("COM3".to_string()),
+            bitrate: Some("S8".to_string()),
+            data_bitrate: Some("Y2".to_string()),
+            listen_only: true,
+            message: "connected".to_string(),
+        };
+
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(
+            json,
+            r#"{"bus":"CAN0","adapter":"weact","status":"connected","frames":123,"errors":0,"port":"COM3","bitrate":"S8","data_bitrate":"Y2","listen_only":true,"message":"connected"}"#
+        );
+    }
 }

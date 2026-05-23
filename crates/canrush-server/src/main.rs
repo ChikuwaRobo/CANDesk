@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex,
+    mpsc, Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
@@ -425,17 +425,23 @@ fn spawn_weact_bus_worker(
         listen_only: request.listen_only,
         timeout: Duration::from_millis(200),
     };
-    Ok(thread::spawn(move || {
+    let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+    let handle = thread::spawn(move || {
         let mut adapter = match WeActSerialAdapter::connect(config) {
-            Ok(adapter) => adapter,
-            Err(_) => {
+            Ok(adapter) => {
+                let _ = startup_sender.send(Ok(()));
+                adapter
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let _ = startup_sender.send(Err(message.clone()));
                 context.errors.fetch_add(1, Ordering::Relaxed);
                 push_diagnostic(
                     &context.diagnostics,
                     DiagnosticEventDto::new(
                         "error",
                         "weact-connect",
-                        "failed to connect weact adapter",
+                        message,
                         Some(context.bus.clone()),
                         0,
                     ),
@@ -481,7 +487,18 @@ fn spawn_weact_bus_worker(
                 }
             }
         }
-    }))
+    });
+    match startup_receiver.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(())) => Ok(handle),
+        Ok(Err(message)) => {
+            let _ = handle.join();
+            Err(message)
+        }
+        Err(error) => {
+            let _ = handle.join();
+            Err(format!("timeout waiting for weact startup: {error}"))
+        }
+    }
 }
 
 fn push_diagnostic(

@@ -564,10 +564,13 @@ fn run_server_command(args: ServerArgs, global_server: Option<&str>) -> Result<(
 }
 
 fn run_stats(args: StatsArgs, global_server: Option<&str>) -> Result<()> {
-    let _duration = parse_duration(&args.duration)?;
+    let duration = parse_duration(&args.duration)?;
     let endpoint = resolve_server_endpoint(None, global_server)?;
-    let buses = fetch_server_buses(&endpoint)?;
-    for bus in buses {
+    let before = fetch_server_buses(&endpoint)?;
+    std::thread::sleep(duration);
+    let after = fetch_server_buses(&endpoint)?;
+    let elapsed_seconds = duration.as_secs_f64().max(0.001);
+    for bus in after {
         if !args.all_buses
             && args
                 .bus
@@ -576,9 +579,16 @@ fn run_stats(args: StatsArgs, global_server: Option<&str>) -> Result<()> {
         {
             continue;
         }
+        let before_frames = before
+            .iter()
+            .find(|before_bus| before_bus.bus == bus.bus)
+            .map(|before_bus| before_bus.frames)
+            .unwrap_or(bus.frames);
+        let delta_frames = bus.frames.saturating_sub(before_frames);
+        let rate_hz = delta_frames as f64 / elapsed_seconds;
         println!(
-            "bus={} status={} frames={} errors={} adapter={}",
-            bus.bus, bus.status, bus.frames, bus.errors, bus.adapter
+            "bus={} status={} frames={} delta_frames={} rate_hz={:.1} errors={} adapter={}",
+            bus.bus, bus.status, bus.frames, delta_frames, rate_hz, bus.errors, bus.adapter
         );
     }
     Ok(())
