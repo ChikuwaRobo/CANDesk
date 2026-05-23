@@ -1,8 +1,12 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, SystemTime};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -35,6 +39,7 @@ struct AppState {
     started_at: SystemTime,
     read_only: bool,
     hub: Arc<Mutex<FrameHub>>,
+    stop_workers: Arc<AtomicBool>,
 }
 
 fn app(state: AppState) -> Router {
@@ -103,22 +108,17 @@ async fn handle_stream(mut socket: WebSocket, state: AppState, query: StreamQuer
     };
     let subscription_id = subscription.id();
 
-    if let Err(message) = publish_fake_sample(&state.hub) {
-        let diagnostic = canrush_core::api::DiagnosticEventDto::new(
-            "error",
-            "fake-adapter",
-            message,
-            query.bus,
-            0,
-        );
-        let _ = send_json(&mut socket, &diagnostic).await;
-        return;
-    }
-
-    while let Some(event) = subscription.try_recv() {
-        let dto = FrameEventDto::from_frame(event.sequence, &event.frame);
-        if send_json(&mut socket, &dto).await.is_err() {
+    loop {
+        if state.stop_workers.load(Ordering::Relaxed) {
             break;
+        }
+        if let Some(event) = subscription.try_recv() {
+            let dto = FrameEventDto::from_frame(event.sequence, &event.frame);
+            if send_json(&mut socket, &dto).await.is_err() {
+                break;
+            }
+        } else {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -147,23 +147,38 @@ fn subscribe_options_from_query(query: &StreamQuery) -> Result<SubscribeOptions,
     Ok(options)
 }
 
-fn publish_fake_sample(hub: &Arc<Mutex<FrameHub>>) -> Result<(), String> {
-    let mut adapter = match FakeAdapter::sample() {
-        Ok(adapter) => adapter,
-        Err(error) => return Err(error.to_string()),
-    };
+fn spawn_fake_bus_worker(
+    hub: Arc<Mutex<FrameHub>>,
+    stop: Arc<AtomicBool>,
+) -> Result<JoinHandle<()>, String> {
+    let frames = collect_fake_frames()?;
+    Ok(thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            for frame in &frames {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let mut frame = frame.clone();
+                frame.timestamp_host = SystemTime::now();
+                if let Ok(mut hub) = hub.lock() {
+                    hub.publish(frame);
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }))
+}
 
+fn collect_fake_frames() -> Result<Vec<canrush_core::model::CanFrame>, String> {
+    let mut adapter = FakeAdapter::sample().map_err(|error| error.to_string())?;
+    let mut frames = Vec::new();
     loop {
         match adapter.next_frame() {
-            Ok(Some(frame)) => {
-                let mut hub = hub.lock().map_err(|error| error.to_string())?;
-                hub.publish(frame);
-            }
-            Ok(None) => break,
+            Ok(Some(frame)) => frames.push(frame),
+            Ok(None) => return Ok(frames),
             Err(error) => return Err(error.to_string()),
         }
     }
-    Ok(())
 }
 
 async fn send_json<T: serde::Serialize>(
@@ -214,17 +229,24 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let hub = Arc::new(Mutex::new(FrameHub::default()));
+    let stop_workers = Arc::new(AtomicBool::new(false));
+    let fake_worker = spawn_fake_bus_worker(Arc::clone(&hub), Arc::clone(&stop_workers))
+        .map_err(std::io::Error::other)?;
     let state = AppState {
         server_name: cli.server_name,
         started_at: SystemTime::now(),
         read_only: cli.read_only,
-        hub: Arc::new(Mutex::new(FrameHub::default())),
+        hub,
+        stop_workers: Arc::clone(&stop_workers),
     };
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;
     println!("canrush-server listening on http://{}", cli.listen);
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    stop_workers.store(true, Ordering::Relaxed);
+    let _ = fake_worker.join();
     Ok(())
 }
 
@@ -246,6 +268,7 @@ mod tests {
             started_at: UNIX_EPOCH + Duration::from_millis(1234),
             read_only: true,
             hub: Arc::new(Mutex::new(FrameHub::default())),
+            stop_workers: Arc::new(AtomicBool::new(false)),
         };
 
         let status = server_status(&state);
@@ -285,5 +308,12 @@ mod tests {
             .id_filters
             .iter()
             .any(|filter| filter.matches(0x100)));
+    }
+
+    #[test]
+    fn collect_fake_frames_for_worker() {
+        let frames = collect_fake_frames().unwrap();
+        assert_eq!(frames.len(), 3);
+        assert!(frames.iter().any(|frame| frame.id == 0x100));
     }
 }
