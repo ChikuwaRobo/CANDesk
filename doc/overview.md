@@ -12,17 +12,19 @@ CANRush は、USB-CAN アダプタを PC から利用するためのビューワ
 
 ## 想定する利用形態
 
-CANRush は、デスクトップアプリとして提供する。アプリ内部にサーバー機能を持たせ、サーバーが USB-CAN アダプタを直接管理する。GUI と CLI は同じサーバー API を通して CAN データへアクセスする。
+CANRush は、CLI とデスクトップ GUI の両方から利用できる CAN ツール群として提供する。中核は `canrush-core` に置き、USB-CAN アダプタ制御、受信ストリーム、キャプチャ、将来の送信処理を GUI から独立させる。GUI は中核機能の利用者の 1 つとして扱い、CAN デバイス制御や長時間処理を GUI 側に閉じ込めない。
 
 主な利用形態は次の通り。
 
+- CLI から指定時間だけ CAN フレームをキャプチャし、CSV として保存する。
+- CLI からポート列挙、接続確認、短時間モニタ、統計確認を行う。
 - GUI を起動し、CAN バスをリアルタイムに観測する。
-- GUI が動作している間でも、CLI から指定時間だけ CAN フレームをキャプチャし、CSV として保存する。
+- GUI が動作している間でも、CLI からキャプチャや状態確認を行えるようにする。
 - 複数の CAN バスを同時に接続し、GUI 上では CAN0、CAN1、CAN2 のようなバス識別子を付けたうえで、受信データを同一ビューに混ぜて表示する。
 - GUI から CAN データを手動送信する。送信は単発送信と定期送信を選べる。
 - 外部ファイルから送信データプリセットを読み込み、プリセットを選択して送信する。
 
-ログ機能は将来的に追加する可能性がある。ただし初期設計では、ログよりも「外部から指定時間キャプチャできる機能」を優先する。ログ機能は、後述するフレーム配信とキャプチャ機構の上に追加する。
+ログ機能は将来的に追加する可能性がある。ただし初期設計では、GUI 内ログよりも CLI のキャプチャ、接続確認、統計確認を優先する。ログ機能は、後述するフレーム配信とキャプチャ機構の上に追加する。
 
 同時利用する CAN バス数は、実用上は 2 バスを主対象とし、最大 4 バス程度までを想定する。UI、設定、内部データ構造は 4 バスまで自然に扱える形にするが、それ以上の大規模監視は初期スコープに含めない。
 
@@ -31,40 +33,38 @@ CANRush は、デスクトップアプリとして提供する。アプリ内部
 推奨構成は次の通りである。
 
 ```text
-+-----------------------------+      +------------------+
-| Desktop App                 |      | CLI              |
-| - GUI                       |      | capture/export   |
-| - extension module host     |      +---------+--------+
-|                             |                |
-| +-------------------------+ |                | server API
-| | CANRush Server Core     |<----------------+
-| | - device/session mgmt   | |
-| | - frame stream hub      | |
-| | - capture service       | |
-| | - transmit scheduler    | |
-| | - latest-frame state    | |
-| +-----------+-------------+ |
-+-------------|---------------+
-              |
-              | adapter interface
-              v
-+---------------------------------------------+
-| CAN Adapter Layer                           |
-| - WeAct SLCAN-FD adapter                    |
-| - slcan serial adapter                      |
-| - SocketCAN / gs_usb adapter                |
-| - future vendor adapter implementations     |
-+--------------------+------------------------+
-                     |
-                     v
-+---------------------------------------------+
-| USB-CAN adapters / OS CAN interfaces        |
-+---------------------------------------------+
++-------------------+     +----------------------+     +----------------------+
+| CLI               |     | Desktop Monitor GUI  |     | Plot App / Extension |
+| - capture/export  |     | - receive monitor    |     | - live plot          |
+| - list/check      |     | - connection control |     | - offline plot       |
+| - stats/monitor   |     | - basic detail view  |     | - signal view        |
++---------+---------+     +----------+-----------+     +----------+-----------+
+          |                          |                            |
+          | process API / local IPC  | process API / local IPC    | stream/file API
+          v                          v                            v
++--------------------------------------------------------------------------+
+| CANRush Core / optional local server                                     |
+| - device/session mgmt     - frame stream hub      - capture service      |
+| - latest-frame state      - diagnostics           - future tx scheduler  |
++-----------------------------------+--------------------------------------+
+                                    |
+                                    | adapter interface
+                                    v
++--------------------------------------------------------------------------+
+| CAN Adapter Layer                                                        |
+| - WeAct SLCAN-FD adapter     - slcan serial adapter                      |
+| - SocketCAN / gs_usb adapter - future vendor adapter implementations     |
++-----------------------------------+--------------------------------------+
+                                    |
+                                    v
++--------------------------------------------------------------------------+
+| USB-CAN adapters / OS CAN interfaces                                     |
++--------------------------------------------------------------------------+
 ```
 
-サーバーコアが CAN デバイスまたは OS CAN interface を排他的に管理する。GUI と CLI はシリアルポート、SocketCAN interface、USB デバイスを直接開かない。これにより、GUI で観測中に CLI キャプチャを開始しても、デバイスの取り合いが発生しない。
+CAN デバイスまたは OS CAN interface を開く責務は `canrush-core` に集約する。CLI、Desktop Monitor GUI、Plot App は、同じ core API またはローカル IPC を通して CAN データへアクセスする。これにより、UI や CLI コマンドごとにアダプタ実装を重複させず、デバイスの取り合いや挙動差を避ける。
 
-デスクトップアプリ起動時にサーバーコアも起動する。CLI は、起動中のデスクトップアプリ内サーバーに接続してキャプチャする。将来的にヘッドレス運用が必要になった場合は、同じサーバーコアを単独プロセスとして起動できる構成に拡張する。
+初期段階では、CLI は `canrush-core` をプロセス内で直接利用して単独実行できることを優先する。GUI と CLI が同じ実デバイスを同時利用する段階では、同じ core をローカルサーバーまたはデスクトップアプリ内サーバーとして動かし、各クライアントがそのサーバーに接続する構成へ拡張する。ヘッドレス運用が必要になった場合も、同じ core を単独プロセスとして起動できるようにする。
 
 ## サーバーの責務
 
@@ -143,9 +143,16 @@ CAN ID ごとの一覧では、次の列を表示する。
 
 表示は複数バスを混ぜる。ただしバス名列を必ず表示し、同じ CAN ID でも別バスのデータとして区別できるようにする。
 
-プロット機能は、GUI 本体へ多機能に組み込まない。GUI 本体はリアルタイム一覧、送信、キャプチャ操作を中心に保ち、プロットはソフトウェア側の拡張モジュールとして追加しやすい構成にする。
+プロット機能は、受信モニタ GUI 本体へ多機能に組み込まない。GUI 本体はリアルタイム一覧、接続状態、基本 detail 表示を中心に保ち、ログ、送信、高度なプロットは別機能として扱う。
 
-初期段階では、拡張モジュールがフレームストリームまたはデコード済み信号ストリームを購読できるようにする。プロットに必要な履歴リングバッファ、対象信号選択、表示設定は拡張モジュール側に閉じ込め、GUI 本体の複雑化を避ける。
+プロット機能は、独立性の高いアプリケーションとしても、GUI 的に統合された拡張機能としても成立するように、まずデータ境界を明確にする。Plot 側は CAN デバイスを直接開かず、core が公開する live frame stream、capture file、将来の decoded signal stream を入力にする。プロットに必要な履歴リングバッファ、対象信号選択、表示設定、描画負荷は Plot 側へ閉じ込め、受信モニタ GUI の安定性に影響させない。
+
+プロットの提供形態は次の 2 案を比較しながら進める。
+
+- 独立アプリ案: `canrush-plot` を受信モニタとは別プロセス、別ウィンドウ、別 package として用意する。live stream と CSV capture の両方を入力にできる。描画負荷や UI 複雑性を分離しやすく、オフライン解析ツールとしても使いやすい。
+- 統合拡張案: 受信モニタ GUI から起動できる拡張画面または別ウィンドウとして Plot を提供する。GUI 的には一体に見えるが、内部的には stream API を購読する別モジュールとして扱う。bus 選択や接続状態を共有しやすい一方、release、状態同期、UI 責務の境界が曖昧になりやすい。
+
+初期方針としては、独立アプリ案に寄せたデータ契約を先に作る。後から統合拡張案へ寄せる場合も、受信モニタ GUI が Plot の内部状態や描画履歴を直接持たないようにする。
 
 ## 受信専用 GUI 構成
 
@@ -305,13 +312,13 @@ API は、制御系とストリーム系を分ける。
 - 制御系: デバイス一覧、接続、切断、状態取得、送信開始、送信停止、キャプチャ開始。
 - ストリーム系: 受信フレーム、送信イベント、状態イベント、キャプチャデータ。
 
-デスクトップ GUI は、サーバーコアに対してプロセス内 API またはローカル IPC で接続する。CLI は起動中のデスクトップアプリ内サーバーに接続するため、ローカル HTTP、ローカル TCP、Unix domain socket / named pipe などの候補から選ぶ。
+CLI はまず `canrush-core` をプロセス内 API として直接利用し、GUI なしで capture、接続診断、monitor/stats を実行できるようにする。複数クライアントが同じ実デバイスを同時利用する段階では、同じ core をローカルサーバー化し、デスクトップ GUI、CLI、Plot App がローカル HTTP、ローカル TCP、Unix domain socket / named pipe などで接続する方式を検討する。
 
-ただし、実装言語や GUI フレームワークを選ぶ前に API 形式を固定しすぎない。重要なのは、GUI と CLI が同じサーバー API を使い、CAN デバイスへの直接アクセスをサーバーへ集約することである。
+ただし、IPC 形式は早期に固定しすぎない。重要なのは、CLI、GUI、Plot App が同じ core のモデルとストリーム契約を使い、CAN デバイスへの直接アクセスをアプリケーション層へ漏らさないことである。
 
 ## 具体実装案
 
-現時点の推奨実装は、Rust を中核にしたデスクトップアプリ構成とする。CAN の受信、送信、キャプチャ、アダプタ抽象化、CLI は Rust で実装し、GUI は Tauri + TypeScript で構築する。GUI は表示と操作要求の発行に集中し、CAN デバイス制御や定期送信の時刻管理を持たない。
+現時点の推奨実装は、Rust の `canrush-core` を中核にした CLI / GUI 分離構成とする。CAN の受信、送信、キャプチャ、アダプタ抽象化、CLI は Rust で実装し、受信モニタ GUI は Tauri + TypeScript で構築する。GUI は表示と操作要求の発行に集中し、CAN デバイス制御、長時間 capture、定期送信の時刻管理を持たない。
 
 Rust を中核にする理由は次の通り。
 
@@ -363,19 +370,23 @@ status()
 
 受信フレームは adapter から server の frame hub に集約する。frame hub は、GUI の最新値一覧、CLI キャプチャ、将来ログの購読元になる。GUI 表示用にはすべての生フレームをそのまま描画せず、サーバー側で `bus + frame_format + id_format + id + frame_type` ごとの latest-frame state を作り、一定周期で UI に差分通知する。
 
-GUI は次の画面構成から始める。
+受信モニタ GUI は次の画面構成から始める。
 
 - デバイス/バス接続パネル: シリアルポート、adapter profile、bitrate、data bitrate、listen-only を選択する。
 - 受信一覧: CAN ID ごとの最新値、周期、受信回数を表示する。
 - フレーム詳細: 選択行の raw payload、DLC、flags、raw adapter line を確認する。
-- 送信パネル: 単発送信と定期送信を扱う。
-- キャプチャ操作: 出力先、時間、対象バスを指定して CSV に保存する。
+- 状態表示: 接続状態、受信エラー、パース失敗、概算 bus load を表示する。
 
-初期 CLI は `canrush capture` のみに絞る。GUI 内サーバーが起動している場合はそこへ接続し、未起動時に単独でデバイスを開く機能は後続対応にする。CLI の例は次の形にする。
+GUI の送信パネル、GUI 内ログ、GUI キャプチャ操作は後続対応にする。まず CLI で capture、接続診断、短時間 monitor/stats を整備し、GUI はそれらで固めた core API と状態情報を表示する利用者として扱う。
+
+初期 CLI は `canrush capture` を中心に始め、続いて `list-ports`、`check`、`monitor`、`stats` を追加する。CLI は GUI なしで `canrush-core` を直接利用できることを優先する。将来、GUI と CLI が同じ実デバイスを同時利用する必要が出た段階で、ローカルサーバー接続へ拡張する。CLI の例は次の形にする。
 
 ```text
 canrush capture --duration 10s --bus CAN0 --output capture.csv
 canrush capture --duration 30s --all-buses --include-tx --output capture.csv
+canrush check --adapter weact --port COM3 --bitrate S8 --listen-only
+canrush monitor --duration 5s --all-buses
+canrush stats --duration 10s --all-buses
 ```
 
 テストは、実機がなくても進められる層から用意する。
@@ -536,6 +547,22 @@ Detail panel の選択状態は、実受信フレームの `rowKey` ではなく
 
 Bus 設定は CAN FD 対応デバイスの設定をそのまま扱うため、data bitrate など FD 用項目を残す。一方、受信データリストは CAN 2.0 の監視を主眼にして、FD 専用の `Frame` と `Flags` 列は表示しない。CAN ID は標準 ID を 3 桁、拡張 ID を 8 桁の 0 埋め 16 進表記にすることで ID 表記だけで区別できるようにし、`ID fmt` 列も表示しない。DLC と Len は Data の byte 表示から読み取れるため、受信データリストでは表示しない。Detail panel では従来通り frame format、DLC、Len、raw line を表示する。内部データモデルと集約キーには `frame_format` と flags を残し、将来 CAN FD の詳細表示が必要になったときに復帰できるようにする。
 
+### 5.5. 受信 GUI 後の機能実装方針
+
+基本的な受信 GUI が整った後は、GUI のログや送信機能へ進む前に CLI 系を先に固める。CLI は自動テスト、実機確認、長時間 capture、将来の外部連携の土台になるため、GUI より先に API とデータ形式の安定化へ効きやすい。GUI は当面、受信モニタとして最小限の操作と状態表示に留める。
+
+優先順位は次の通りにする。
+
+1. CLI capture の強化: bus filter、ID filter、duration、件数上限、出力先、終了理由を安定させる。出力 CSV は GUI 表示状態や Merge 表示に依存しない raw frame を基準にする。
+2. CLI 接続診断: `list-ports`、短時間 connect check、adapter firmware/version 確認、初期化コマンドの失敗理由、パース失敗数を CLI で確認できるようにする。
+3. CLI monitor/stats: GUI を起動しなくても、受信中の bus 別 Hz、Load、ID 数、エラー数を短時間表示できるようにする。CI ではなく実機確認用の運用コマンドとして扱う。
+4. Capture file 契約の固定: CSV header、時刻形式、ID 表記、flags、CAN FD 項目、将来の `direction=tx` の扱いを固定し、Plot App や外部ツールが読みやすい形式にする。
+5. Plot 入力 API の検討: live frame stream と capture file の両方を Plot の入力として扱えるようにする。まずはファイル入力を安定させ、live stream はローカル IPC/API の設計と合わせて進める。
+6. GUI 設定保存と軽量診断: CLI の診断情報を GUI でも見られるようにする。ただし GUI 内ログ、GUI 送信、GUI プロットはまだ追加しない。
+7. 送信系: まず CLI 送信または core API の送信検証を行い、その後に GUI 送信へ進む。送信済みフレームは `direction=tx` として frame hub と capture に流せる形にする。
+
+GUI 内ログ、GUI 送信、GUI 統合プロット、DBC 読み込みはこの後に回す。まず CLI と capture file を安定させ、外部アプリやプロット機能が依存できるデータ面の契約を固める。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。
@@ -589,13 +616,16 @@ WeAct adapter の受信、送信、CLI、GUI が安定してから標準 slcan a
 - slcan を特殊扱いせず、CAN Adapter Layer の一実装として扱う。
 - 初期 adapter は WeActStudio USB2CANFDV1 向けの `weact_slcan_fd` を優先する。
 - 共通フレームモデルは最初から CAN FD を表現できる形にする。
+- 受信 GUI が基本機能を満たした後は、GUI 内ログや GUI 送信より CLI 系機能を優先する。
 - 外部 CLI キャプチャを GUI 内部ログより優先する。
 - CLI キャプチャの初期出力形式は CSV のみにする。
+- CLI の接続診断、短時間モニタ、統計確認を、実機検証用の標準経路として整備する。
+- Capture file は Plot App や外部ツールの入力にも使えるよう、列定義と表記を安定させる。
 - 送信プリセット形式も CSV にする。
 - 受信処理、GUI 表示、CLI キャプチャ、将来ログは、同じフレームストリームを共有する設計にする。
 - 複数バス対応を初期設計に含め、フレームのキーと表示には必ずバス名を含める。実用 2 バス、最大 4 バス程度を想定する。
 - 送信の定期実行は GUI ではなくサーバー側で管理する。
-- プロット機能は GUI 本体に作り込まず、拡張モジュールとして追加しやすい構成にする。
+- プロット機能は受信モニタ GUI 本体に作り込まず、独立アプリまたは統合拡張のどちらにも展開できるよう、live stream / capture file / decoded signal stream の入力契約を先に固める。
 - DBC 読み込みは今回実装しない。
 
 ## 検討が必要な未確定事項
