@@ -955,6 +955,44 @@ CLI 完結で進める server 管理機能として、`GET /api/v1/sessions/defa
 
 WeAct 実機でも server 経由の CLI 操作を確認した。`COM3` を `CAN0`、`COM85` を `CAN1` とし、`canrush server connect --adapter weact --bitrate S8 --data-bitrate Y2 --listen-only`、`canrush --server ... capture`、`canrush --server ... stats`、`canrush server diagnostics`、`canrush server disconnect` が動作する。単独 bus では `target\server-weact-com3-can0.csv` と `target\server-weact-com85-can1.csv` にそれぞれ 20 frame を保存できた。さらに同一 server process で `CAN0=COM3` と `CAN1=COM85` を同時 connect し、`canrush --server 127.0.0.1:49008 capture --all-buses --duration 2s --max-frames 40 --output target\server-weact-all-buses.csv` により両 bus 混在の CSV 出力を確認した。
 
+CLI の機械処理向け出力として、`canrush server status`、`canrush server buses`、`canrush server connect`、`canrush server disconnect`、`canrush server diagnostics`、`canrush stats --server ...` に `--json` を追加した。JSON は server API DTO をそのまま出力する。`stats --json` は、指定 duration の前後で取得した frame count から `delta_frames` と `rate_hz` を計算し、`StatsSampleDto` の配列として出力する。
+
+### GUI server client 化の実装予定
+
+GUI は次の順で、現在の Tauri backend 直接 adapter 接続から `canrush-server` client へ移行する。
+
+1. GUI 起動時の server 接続設定
+   - まずは `127.0.0.1:49000` を default endpoint とする。
+   - 既存 server に接続する。server がいない場合の自動起動は後続対応にする。
+   - `GET /api/v1/status` で protocol version と server name を表示する。
+
+2. bus 状態表示を server API へ置き換える。
+   - 既存 Tauri command の bus 状態を、`GET /api/v1/sessions/default/buses` の DTO に寄せる。
+   - GUI は `BusStatusDto` を表示するだけにし、worker lifecycle を持たない。
+   - この段階では受信一覧はまだ既存実装のままでもよいが、接続状態の source を server API に寄せる。
+
+3. connect / disconnect 操作を server API へ移す。
+   - GUI の Connect は `POST /api/v1/sessions/default/buses/{bus}/connect` を呼ぶ。
+   - Disconnect は `POST /api/v1/sessions/default/buses/{bus}/disconnect` を呼ぶ。
+   - Tauri backend が直接 `WeActSerialAdapter` を open する経路は削除または無効化する。
+
+4. 受信一覧を WebSocket stream へ移す。
+   - GUI は `GET /api/v1/sessions/default/stream?kind=gui` を購読する。
+   - GUI 側は受信した `frame` event から latest-frame table を更新する。
+   - 高頻度 frame は GUI 側で全件描画せず、既存と同じ 30Hz 表示更新に丸める。
+
+5. diagnostics / stats 表示を server DTO に寄せる。
+   - diagnostics は `GET /api/v1/sessions/default/diagnostics` を表示する。
+   - bus frame count / error count は `BusStatusDto` を基準にする。
+   - GUI 独自の集計は表示用の最小限に留める。
+
+6. GUI 起動時 server lifecycle の整理
+   - local server 自動起動、既存 server 接続、remote endpoint 指定を選べるようにする。
+   - 自動起動した server は GUI 終了時に停止する。
+   - remote server へ接続している場合、GUI 終了時に server を停止しない。
+
+GUI 移行時のテスト方針は、先に CLI / server API で動作を固定し、GUI は DTO 変換と表示更新だけを確認する。Tauri backend の役割は server process 管理と HTTP/WebSocket client に限定し、CAN adapter 制御を持たせない。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。

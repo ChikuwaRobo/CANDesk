@@ -63,6 +63,17 @@ pub struct ServerDiagnosticsDto {
     pub diagnostics: Vec<DiagnosticEventDto>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatsSampleDto {
+    pub bus: String,
+    pub status: String,
+    pub frames: u64,
+    pub delta_frames: u64,
+    pub rate_hz: f64,
+    pub errors: u64,
+    pub adapter: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamHelloDto {
     pub event: String,

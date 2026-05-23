@@ -10,6 +10,7 @@ use canrush_core::adapter::{
 };
 use canrush_core::api::{
     BusStatusDto, ConnectBusRequest, FrameEventDto, ServerDiagnosticsDto, ServerStatusDto,
+    StatsSampleDto,
 };
 use canrush_core::capture::{
     capture_from_source, write_csv_file, CanIdFilter, CaptureOptions, CSV_HEADER,
@@ -135,18 +136,27 @@ enum ServerCommand {
 struct ServerStatusArgs {
     #[arg(long)]
     server: Option<String>,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
 struct ServerBusesArgs {
     #[arg(long)]
     server: Option<String>,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
 struct ServerDiagnosticsArgs {
     #[arg(long)]
     server: Option<String>,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -156,6 +166,9 @@ struct ServerDisconnectArgs {
 
     #[arg(long)]
     bus: String,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -183,6 +196,9 @@ struct ServerConnectArgs {
 
     #[arg(long)]
     listen_only: bool,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -195,6 +211,9 @@ struct StatsArgs {
 
     #[arg(long, default_value = "1s")]
     duration: String,
+
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -519,45 +538,65 @@ fn run_server_command(args: ServerArgs, global_server: Option<&str>) -> Result<(
         ServerCommand::Buses(args) => {
             let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
             let buses = fetch_server_buses(&endpoint)?;
-            print_buses(&buses);
+            if args.json {
+                print_json(&buses)?;
+            } else {
+                print_buses(&buses);
+            }
             Ok(())
         }
         ServerCommand::Connect(args) => {
             let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
             let status = post_server_connect(&endpoint, &args)?;
-            print_bus(&status);
+            if args.json {
+                print_json(&status)?;
+            } else {
+                print_bus(&status);
+            }
             Ok(())
         }
         ServerCommand::Diagnostics(args) => {
             let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
             let diagnostics = fetch_server_diagnostics(&endpoint)?;
-            for diagnostic in diagnostics.diagnostics {
-                println!(
-                    "severity={} code={} bus={} dropped_count={} message={}",
-                    diagnostic.severity,
-                    diagnostic.code,
-                    diagnostic.bus.as_deref().unwrap_or("-"),
-                    diagnostic.dropped_count,
-                    diagnostic.message
-                );
+            if args.json {
+                print_json(&diagnostics)?;
+            } else {
+                for diagnostic in diagnostics.diagnostics {
+                    println!(
+                        "severity={} code={} bus={} dropped_count={} message={}",
+                        diagnostic.severity,
+                        diagnostic.code,
+                        diagnostic.bus.as_deref().unwrap_or("-"),
+                        diagnostic.dropped_count,
+                        diagnostic.message
+                    );
+                }
             }
             Ok(())
         }
         ServerCommand::Disconnect(args) => {
             let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
             let status = post_server_disconnect(&endpoint, &args.bus)?;
-            print_bus(&status);
+            if args.json {
+                print_json(&status)?;
+            } else {
+                print_bus(&status);
+            }
             Ok(())
         }
         ServerCommand::Status(args) => {
             let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
             let status = fetch_server_status(&endpoint)?;
-            println!("endpoint={endpoint}");
-            println!("protocol_version={}", status.protocol_version);
-            println!("server_name={}", status.server_name);
-            println!("started_at_unix_ms={}", status.started_at_unix_ms);
-            println!("read_only={}", status.read_only);
-            println!("status=ok");
+            if args.json {
+                print_json(&status)?;
+            } else {
+                println!("endpoint={endpoint}");
+                println!("protocol_version={}", status.protocol_version);
+                println!("server_name={}", status.server_name);
+                println!("started_at_unix_ms={}", status.started_at_unix_ms);
+                println!("read_only={}", status.read_only);
+                println!("status=ok");
+            }
             Ok(())
         }
     }
@@ -570,6 +609,7 @@ fn run_stats(args: StatsArgs, global_server: Option<&str>) -> Result<()> {
     std::thread::sleep(duration);
     let after = fetch_server_buses(&endpoint)?;
     let elapsed_seconds = duration.as_secs_f64().max(0.001);
+    let mut samples = Vec::new();
     for bus in after {
         if !args.all_buses
             && args
@@ -586,10 +626,31 @@ fn run_stats(args: StatsArgs, global_server: Option<&str>) -> Result<()> {
             .unwrap_or(bus.frames);
         let delta_frames = bus.frames.saturating_sub(before_frames);
         let rate_hz = delta_frames as f64 / elapsed_seconds;
-        println!(
-            "bus={} status={} frames={} delta_frames={} rate_hz={:.1} errors={} adapter={}",
-            bus.bus, bus.status, bus.frames, delta_frames, rate_hz, bus.errors, bus.adapter
-        );
+        samples.push(StatsSampleDto {
+            bus: bus.bus,
+            status: bus.status,
+            frames: bus.frames,
+            delta_frames,
+            rate_hz,
+            errors: bus.errors,
+            adapter: bus.adapter,
+        });
+    }
+    if args.json {
+        print_json(&samples)?;
+    } else {
+        for sample in samples {
+            println!(
+                "bus={} status={} frames={} delta_frames={} rate_hz={:.1} errors={} adapter={}",
+                sample.bus,
+                sample.status,
+                sample.frames,
+                sample.delta_frames,
+                sample.rate_hz,
+                sample.errors,
+                sample.adapter
+            );
+        }
     }
     Ok(())
 }
@@ -702,6 +763,13 @@ fn print_bus(bus: &BusStatusDto) {
         bus.listen_only,
         bus.message,
     );
+}
+
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|error| CanrushError::InvalidArgument(format!("JSON encode failed: {error}")))?;
+    println!("{json}");
+    Ok(())
 }
 
 fn adapter_name(adapter: AdapterKind) -> &'static str {
