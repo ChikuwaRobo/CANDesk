@@ -4,9 +4,11 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use canrush_core::api::{BusStatusDto as ServerBusStatusDto, ConnectBusRequest, FrameEventDto};
+use canrush_core::api::{
+    BusStatusDto as ServerBusStatusDto, ConnectBusRequest, FrameEventDto, ServerStatusDto,
+};
 use canrush_core::endpoint::ServerEndpoint;
 use canrush_core::model::{CanFrame, Direction, FrameFormat, FrameType, IdFormat};
 use canrush_core::server::{FrameRateBucket, LatestFrameState, FRAME_RATE_BUCKET_MS};
@@ -17,6 +19,7 @@ use tungstenite::Message;
 const SERVER_ENDPOINT: &str = "local";
 const SERVER_SESSION: &str = "default";
 const GUI_RATE_WINDOW_BUCKETS: u64 = 2;
+const SERVER_INFO_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Serialize)]
 struct SerialPortDto {
@@ -31,6 +34,17 @@ struct ConnectBusConfig {
     bitrate: String,
     data_bitrate: String,
     listen_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ServerInfoDto {
+    endpoint: String,
+    connected: bool,
+    server_name: String,
+    protocol_version: String,
+    started_at_unix_ms: String,
+    read_only: bool,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +79,7 @@ struct LatestFrameDto {
 
 #[derive(Debug, Serialize)]
 struct SnapshotDto {
+    server: ServerInfoDto,
     buses: Vec<BusStatusDto>,
     frames: Vec<LatestFrameDto>,
     event_log: String,
@@ -86,6 +101,8 @@ impl Drop for StreamRuntime {
 struct ReceiverInner {
     latest: LatestFrameState,
     stream: Option<StreamRuntime>,
+    server_info: Option<ServerInfoDto>,
+    server_info_checked_at: Option<Instant>,
     event_log: String,
 }
 
@@ -177,6 +194,7 @@ fn clear_latest(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
 fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto, String> {
     ensure_stream_worker(&state.inner)?;
 
+    let server = refresh_server_info(&state.inner)?;
     let server_buses = fetch_server_buses().unwrap_or_else(|error| {
         let _ = set_event_log(&state.inner, format!("server snapshot failed: {error}"));
         Vec::new()
@@ -214,6 +232,7 @@ fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto
     frames.sort_by(|a, b| a.bus.cmp(&b.bus).then_with(|| a.id.cmp(&b.id)));
 
     Ok(SnapshotDto {
+        server,
         buses,
         frames,
         event_log: inner.event_log.clone(),
@@ -390,6 +409,45 @@ fn parse_unix_ns(value: &str) -> SystemTime {
 
 fn fetch_server_buses() -> Result<Vec<ServerBusStatusDto>, String> {
     get_json(&format!("/api/v1/sessions/{SERVER_SESSION}/buses"))
+}
+
+fn refresh_server_info(shared: &Arc<Mutex<ReceiverInner>>) -> Result<ServerInfoDto, String> {
+    {
+        let inner = shared.lock().map_err(|error| error.to_string())?;
+        if let (Some(info), Some(checked_at)) = (&inner.server_info, inner.server_info_checked_at) {
+            if checked_at.elapsed() < SERVER_INFO_REFRESH_INTERVAL {
+                return Ok(info.clone());
+            }
+        }
+    }
+
+    let endpoint = server_endpoint()?;
+    let endpoint_text = endpoint.to_string();
+    let info = match get_json::<ServerStatusDto>("/api/v1/status") {
+        Ok(status) => ServerInfoDto {
+            endpoint: endpoint_text,
+            connected: true,
+            server_name: status.server_name,
+            protocol_version: status.protocol_version,
+            started_at_unix_ms: status.started_at_unix_ms,
+            read_only: status.read_only,
+            message: "connected".to_string(),
+        },
+        Err(error) => ServerInfoDto {
+            endpoint: endpoint_text,
+            connected: false,
+            server_name: "-".to_string(),
+            protocol_version: "-".to_string(),
+            started_at_unix_ms: "-".to_string(),
+            read_only: false,
+            message: error,
+        },
+    };
+
+    let mut inner = shared.lock().map_err(|error| error.to_string())?;
+    inner.server_info = Some(info.clone());
+    inner.server_info_checked_at = Some(Instant::now());
+    Ok(info)
 }
 
 fn map_bus_status(status: ServerBusStatusDto) -> BusStatusDto {

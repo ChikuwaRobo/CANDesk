@@ -96,7 +96,18 @@ type LatestFrameDto = {
   raw: string;
 };
 
+type ServerInfoDto = {
+  endpoint: string;
+  connected: boolean;
+  server_name: string;
+  protocol_version: string;
+  started_at_unix_ms: string;
+  read_only: boolean;
+  message: string;
+};
+
 type SnapshotDto = {
+  server: ServerInfoDto;
   buses: BusStatusDto[];
   frames: LatestFrameDto[];
   event_log: string;
@@ -105,7 +116,15 @@ type SnapshotDto = {
 type SortMode = "id" | "bus" | "recent";
 
 const dummyIds = [0x103, 0x110, 0x180, 0x201, 0x2a0, 0x305, 0x3f2, 0x420];
-const serverEndpointLabel = "local (127.0.0.1:49000)";
+const initialServerInfo: ServerInfoDto = {
+  endpoint: "127.0.0.1:49000",
+  connected: false,
+  server_name: "-",
+  protocol_version: "-",
+  started_at_unix_ms: "-",
+  read_only: false,
+  message: "not checked",
+};
 
 const initialBuses: BusConfig[] = [
   {
@@ -294,6 +313,14 @@ function numericValue(value: string) {
   return Number.parseFloat(value);
 }
 
+function formatServerStartedAt(value: string) {
+  const millis = Number.parseInt(value, 10);
+  if (!Number.isFinite(millis)) {
+    return "-";
+  }
+  return new Date(millis).toLocaleTimeString();
+}
+
 function rateBarWidthPercent(rateHz: string, maxRateHz: number) {
   const value = numericValue(rateHz);
   if (!Number.isFinite(value) || !Number.isFinite(maxRateHz) || maxRateHz <= 0) {
@@ -348,6 +375,7 @@ function App() {
   const [debugDummy, setDebugDummy] = React.useState(false);
   const [paused, setPaused] = React.useState(false);
   const [connected, setConnected] = React.useState(false);
+  const [serverInfo, setServerInfo] = React.useState(initialServerInfo);
   const [eventLog, setEventLog] = React.useState("server client ready");
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
@@ -501,6 +529,7 @@ function App() {
     const timer = window.setInterval(async () => {
       try {
         const snapshot = await invoke<SnapshotDto>("latest_snapshot");
+        setServerInfo(snapshot.server);
         setConnected(snapshot.buses.some((entry) => entry.status === "connected"));
         setBuses((current) =>
           current.map((bus) => {
@@ -571,7 +600,14 @@ function App() {
       <header className="top-bar">
         <div>
           <h1>CANRush</h1>
-          <p>Server: {serverEndpointLabel}</p>
+          <div className="server-summary" aria-label="local server status">
+            <span className={`server-dot ${serverInfo.connected ? "online" : "offline"}`} />
+            <span>{serverInfo.endpoint}</span>
+            <span>{serverInfo.server_name}</span>
+            <span>{serverInfo.protocol_version}</span>
+            <span>{serverInfo.read_only ? "read-only" : "admin"}</span>
+            <span>started {formatServerStartedAt(serverInfo.started_at_unix_ms)}</span>
+          </div>
         </div>
         <div className="toolbar" aria-label="main actions">
           <button type="button" onClick={refreshPorts} title="ポート再読み込み">

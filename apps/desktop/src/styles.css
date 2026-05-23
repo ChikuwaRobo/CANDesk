@@ -90,6 +90,38 @@ input {
   font-size: 13px;
 }
 
+.server-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 6px;
+  color: #66747a;
+  font-size: 12px;
+}
+
+.server-summary span:not(.server-dot) {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a9b5ba;
+}
+
+.server-dot.online {
+  background: #1d8f57;
+}
+
+.server-dot.offline {
+  background: #b94a48;
+}
+
 .toolbar,
 .table-tools {
   display: flex;

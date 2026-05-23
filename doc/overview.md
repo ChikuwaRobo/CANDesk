@@ -1001,6 +1001,8 @@ Bus panel の frame count / error count は server の `BusStatusDto` を基準�
 
 GUI 内 CSV capture は、CLI capture と同じ stream / formatter を使う設計にするため、今回の GUI server client 化では実装しない。画面上の Capture CSV ボタンは後続実装であることが分かるよう無効化した。
 
+GUI のヘッダーにはローカル server 情報を表示する。表示内容は endpoint、server name、protocol version、read-only / admin、server 起動時刻とする。`latest_snapshot` の中に server 情報を含めるが、Tauri backend 側で `GET /api/v1/status` は約 1 秒キャッシュし、30 Hz の表示更新ごとに status API を叩かない。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。
