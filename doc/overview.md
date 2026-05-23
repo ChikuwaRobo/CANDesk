@@ -116,13 +116,38 @@ CLI キャプチャは、サーバーへ接続して次の条件を指定する�
 
 - キャプチャ時間
 - 対象バス。未指定なら全バス
-- CAN ID フィルタ。初期実装では省略可
+- CAN ID フィルタ。`--id` は単一 ID、`--id-range` は範囲指定とする
+- 最大取得件数。`--max-frames` に到達した場合は duration 前でも終了する
 - 出力形式。初期実装では CSV のみ
 - 受信フレームのみか、送信フレームも含めるか
 
-CSV は解析しやすいように、`timestamp_host,bus,direction,id,id_format,frame_format,frame_type,dlc,data_length,flags,data_hex` のような固定列にする。JSON Lines や単一 JSON 配列は初期実装では扱わない。必要になった場合は、同じキャプチャサービスに別 formatter を追加する。
+CSV は解析しやすいように、`timestamp_host,bus,direction,id,id_format,frame_format,frame_type,dlc,data_length,flags,data_hex` の固定列にする。JSON Lines や単一 JSON 配列は初期実装では扱わない。必要になった場合は、同じキャプチャサービスに別 formatter を追加する。
+
+初期 CSV 契約は次の通り。
+
+| 列 | 表記 |
+| --- | --- |
+| `timestamp_host` | Unix epoch 秒。ミリ秒 3 桁固定の decimal。例: `1700000000.123` |
+| `bus` | 論理 bus 名。例: `CAN0` |
+| `direction` | `rx` または `tx` |
+| `id` | `0x` prefix 付き大文字 hex。0 埋めはしない |
+| `id_format` | `standard` または `extended` |
+| `frame_format` | `classic` または `fd` |
+| `frame_type` | `data`、`remote`、`error` |
+| `dlc` | CAN DLC。hex 1 桁表記。例: `8`、`9`、`F` |
+| `data_length` | 実 payload byte 数 |
+| `flags` | `brs;esi` のような semicolon 区切り。該当なしは空 |
+| `data_hex` | payload を空白なし大文字 hex で連結 |
+
+この列順と表記は `capture::tests::writes_csv_with_stable_contract` で golden test として固定する。列追加や表記変更を行う場合は、Plot file reader、外部ツール互換性、ドキュメント、golden test を同時に更新する。
 
 キャプチャの時間制御は、できるだけサーバー側で行う。CLI 側の時計や処理遅延に依存すると、GUI と同時利用したときに境界が曖昧になるためである。
+
+CLI capture は終了理由を出力する。初期値は `source-ended`、`duration-elapsed`、`max-frames-reached` の 3 種類とする。CAN ID 指定は CAN 表記の慣例に合わせ、`0x100` と `100` のどちらも 16 進数として解釈する。
+
+CLI capture の filter 強化として、`--id`、`--id-range`、`--max-frames`、終了理由表示を追加した。`--id` と `--id-range` は複数指定でき、いずれかに一致した frame を取得対象にする。`--max-frames` は取得済み frame 数に対する上限であり、filter で除外された frame は件数に含めない。fake adapter では、`canrush capture --adapter fake --all-buses --id 100 --id-range 101-101 --max-frames 2 --duration 1s --output target\filtered-capture.csv` により `max-frames-reached` で終了することを確認した。
+
+実機確認では、WeActStudio USB2CANFDV1 が `COM3` と `COM85` として認識された。`COM3` を `CAN0`、`COM85` を `CAN1` とし、`--bitrate S8 --data-bitrate Y2 --listen-only` でそれぞれ 2 秒 capture したところ、どちらも `--max-frames 100` に到達して `max-frames-reached` で終了した。出力 CSV は 100 行で、header と `classic/data/8 byte` の frame 表記が期待通りであることを確認した。さらに `COM3` で実受信した ID `0x202` に対して `--id 202 --max-frames 10` を指定し、出力 10 行すべてが `0x202` であることを確認した。
 
 ## GUI の機能
 
@@ -401,6 +426,7 @@ GUI の送信パネル、GUI 内ログ、GUI キャプチャ操作は後続対�
 ```text
 canrush capture --duration 10s --bus CAN0 --output capture.csv
 canrush capture --duration 30s --all-buses --include-tx --output capture.csv
+canrush capture --duration 5s --all-buses --id 100 --id-range 200-20F --max-frames 1000 --output filtered.csv
 canrush check --adapter weact --port COM3 --bitrate S8 --listen-only
 canrush monitor --duration 5s --all-buses
 canrush stats --duration 10s --all-buses
