@@ -1,20 +1,22 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use canrush_core::adapter::{FrameSource, WeActSerialAdapter, WeActSerialConfig};
-use canrush_core::model::{CanFrame, FrameFormat, IdFormat};
-use canrush_core::server::{
-    FrameRateBucket, LatestFrameState, FRAME_RATE_BUCKET_MS, FRAME_RATE_WINDOW_BUCKETS,
-};
-use serde::{Deserialize, Serialize};
+use canrush_core::api::{BusStatusDto as ServerBusStatusDto, ConnectBusRequest, FrameEventDto};
+use canrush_core::endpoint::ServerEndpoint;
+use canrush_core::model::{CanFrame, Direction, FrameFormat, FrameType, IdFormat};
+use canrush_core::server::{FrameRateBucket, LatestFrameState, FRAME_RATE_BUCKET_MS};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::Value;
+use tungstenite::Message;
 
-const LOAD_BUCKET_MS: f64 = 100.0;
-const LOAD_BUCKETS_1S: u64 = 10;
+const SERVER_ENDPOINT: &str = "local";
+const SERVER_SESSION: &str = "default";
+const GUI_RATE_WINDOW_BUCKETS: u64 = 2;
 
 #[derive(Debug, Serialize)]
 struct SerialPortDto {
@@ -68,164 +70,22 @@ struct SnapshotDto {
     event_log: String,
 }
 
-struct BusRuntime {
+struct StreamRuntime {
     stop: Arc<AtomicBool>,
     handle: JoinHandle<()>,
 }
 
-#[derive(Debug, Default, Clone)]
-struct BusStats {
-    status: String,
-    frames: u64,
-    errors: u64,
-    started_at: Option<Instant>,
-    current_load_bucket: Option<LoadBucket>,
-    completed_load_buckets: VecDeque<LoadBucket>,
-    completed_load_bucket_count: u64,
-    completed_load_occupied_ms: f64,
-    rate_buckets: VecDeque<FrameRateBucket>,
-    worst_saturated_1s_ms: f64,
-    message: String,
-}
-
-#[derive(Debug, Clone)]
-struct LoadBucket {
-    index: u64,
-    occupied_ms: f64,
-}
-
-impl BusStats {
-    fn connected() -> Self {
-        Self {
-            status: "connected".to_string(),
-            frames: 0,
-            errors: 0,
-            started_at: Some(Instant::now()),
-            current_load_bucket: None,
-            completed_load_buckets: VecDeque::new(),
-            completed_load_bucket_count: 0,
-            completed_load_occupied_ms: 0.0,
-            rate_buckets: VecDeque::new(),
-            worst_saturated_1s_ms: 0.0,
-            message: "connected".to_string(),
-        }
-    }
-
-    fn utilization_percent(&self) -> String {
-        if self.started_at.is_none() {
-            return "-".to_string();
-        };
-        if self.completed_load_bucket_count == 0 {
-            return "-".to_string();
-        }
-        let measured_ms = LOAD_BUCKET_MS * self.completed_load_bucket_count as f64;
-        format!(
-            "{:.1}",
-            self.completed_load_occupied_ms / measured_ms * 100.0
-        )
-    }
-
-    fn saturated_last_1s_ms(&self) -> String {
-        let Some(started_at) = self.started_at else {
-            return "-".to_string();
-        };
-        let current_bucket = current_load_bucket_index(started_at);
-        format!(
-            "{:.1}",
-            sum_recent_saturated_ms(
-                &self.completed_load_buckets,
-                current_bucket,
-                LOAD_BUCKETS_1S
-            )
-        )
-    }
-
-    fn saturated_worst_1s_ms(&self) -> String {
-        if self.started_at.is_none() {
-            return "-".to_string();
-        }
-        format!("{:.1}", self.worst_saturated_1s_ms)
-    }
-
-    fn rate_hz(&self) -> String {
-        if self.started_at.is_none() {
-            return "-".to_string();
-        }
-        format_completed_window_rate_hz(&self.rate_buckets)
-    }
-
-    fn add_occupied_ms(&mut self, occupied_ms: f64) {
-        let Some(started_at) = self.started_at else {
-            return;
-        };
-        let current_bucket = current_load_bucket_index(started_at);
-        self.close_load_buckets_before(current_bucket);
-        match self.current_load_bucket.as_mut() {
-            Some(bucket) if bucket.index == current_bucket => {
-                bucket.occupied_ms += occupied_ms;
-            }
-            _ => {
-                self.current_load_bucket = Some(LoadBucket {
-                    index: current_bucket,
-                    occupied_ms,
-                })
-            }
-        }
-    }
-
-    fn close_load_buckets_before(&mut self, current_bucket: u64) {
-        let Some(mut bucket) = self.current_load_bucket.take() else {
-            return;
-        };
-        while bucket.index < current_bucket {
-            self.completed_load_occupied_ms += bucket.occupied_ms;
-            self.completed_load_bucket_count += 1;
-            self.completed_load_buckets.push_back(bucket.clone());
-            while self
-                .completed_load_buckets
-                .front()
-                .is_some_and(|front| front.index + LOAD_BUCKETS_1S < current_bucket)
-            {
-                self.completed_load_buckets.pop_front();
-            }
-            self.worst_saturated_1s_ms = self.worst_saturated_1s_ms.max(sum_recent_saturated_ms(
-                &self.completed_load_buckets,
-                bucket.index + 1,
-                LOAD_BUCKETS_1S,
-            ));
-            bucket = LoadBucket {
-                index: bucket.index + 1,
-                occupied_ms: 0.0,
-            };
-        }
-        self.current_load_bucket = Some(bucket);
-    }
-
-    fn add_frame_rate_sample(&mut self, timestamp: SystemTime) {
-        let Some(index) = frame_rate_bucket_index(timestamp) else {
-            return;
-        };
-        match self.rate_buckets.back_mut() {
-            Some(bucket) if bucket.index == index => bucket.count += 1,
-            _ => self
-                .rate_buckets
-                .push_back(FrameRateBucket { index, count: 1 }),
-        }
-        while self
-            .rate_buckets
-            .front()
-            .is_some_and(|bucket| bucket.index + FRAME_RATE_WINDOW_BUCKETS < index)
-        {
-            self.rate_buckets.pop_front();
-        }
+impl Drop for StreamRuntime {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.handle.thread().unpark();
     }
 }
 
 #[derive(Default)]
 struct ReceiverInner {
     latest: LatestFrameState,
-    buses: HashMap<String, BusStats>,
-    workers: HashMap<String, BusRuntime>,
+    stream: Option<StreamRuntime>,
     event_log: String,
 }
 
@@ -261,145 +121,47 @@ fn connect_bus(
         return Err(format!("{} port is required", config.bus));
     }
 
-    stop_bus(&state.inner, &config.bus);
+    ensure_stream_worker(&state.inner)?;
 
-    let bus = config.bus.clone();
-    let stop = Arc::new(AtomicBool::new(false));
-    let worker_stop = Arc::clone(&stop);
-    let shared = Arc::clone(&state.inner);
-    let bitrate_bps = nominal_bitrate_bps(&config.bitrate)?;
-    let adapter_config = WeActSerialConfig {
-        port_name: config.port,
-        bus: bus.clone(),
-        nominal_bitrate: config.bitrate,
+    let request = ConnectBusRequest {
+        adapter: "weact".to_string(),
+        port: Some(config.port),
+        baud: None,
+        bitrate: Some(config.bitrate),
         data_bitrate: Some(config.data_bitrate),
         listen_only: config.listen_only,
-        timeout: Duration::from_millis(200),
-        ..WeActSerialConfig::default()
     };
+    let path = format!(
+        "/api/v1/sessions/{SERVER_SESSION}/buses/{}/connect",
+        config.bus
+    );
+    let status: ServerBusStatusDto = post_json(&path, &request)?;
 
-    {
-        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-        inner.buses.insert(
-            bus.clone(),
-            BusStats {
-                status: "connecting".to_string(),
-                frames: 0,
-                errors: 0,
-                started_at: None,
-                current_load_bucket: None,
-                completed_load_buckets: VecDeque::new(),
-                completed_load_bucket_count: 0,
-                completed_load_occupied_ms: 0.0,
-                rate_buckets: VecDeque::new(),
-                worst_saturated_1s_ms: 0.0,
-                message: "opening adapter".to_string(),
-            },
-        );
-        inner.event_log = format!("{bus} connecting");
-    }
-
-    let worker_bus = bus.clone();
-    let handle = thread::spawn(move || {
-        let mut adapter = match WeActSerialAdapter::connect(adapter_config) {
-            Ok(adapter) => adapter,
-            Err(error) => {
-                update_bus_error(&shared, &worker_bus, error.to_string());
-                return;
-            }
-        };
-
-        update_bus_connected(&shared, &worker_bus);
-        while !worker_stop.load(Ordering::Relaxed) {
-            match adapter.next_frame() {
-                Ok(Some(frame)) => {
-                    let occupied_ms = estimate_occupied_ms(&frame, bitrate_bps);
-                    let timestamp_host = frame.timestamp_host;
-                    if let Ok(mut inner) = shared.lock() {
-                        inner.latest.ingest(frame);
-                        let stats = inner
-                            .buses
-                            .entry(worker_bus.clone())
-                            .or_insert_with(BusStats::connected);
-                        stats.status = "connected".to_string();
-                        stats.frames += 1;
-                        stats.add_occupied_ms(occupied_ms);
-                        stats.add_frame_rate_sample(timestamp_host);
-                        stats.message = "receiving".to_string();
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    if let Ok(mut inner) = shared.lock() {
-                        let stats = inner
-                            .buses
-                            .entry(worker_bus.clone())
-                            .or_insert_with(BusStats::connected);
-                        stats.status = "error".to_string();
-                        stats.errors += 1;
-                        stats.message = error.to_string();
-                        inner.event_log = format!("{} receive error: {error}", worker_bus);
-                    }
-                    break;
-                }
-            }
-        }
-    });
-
-    let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-    inner.workers.insert(bus, BusRuntime { stop, handle });
+    set_event_log(&state.inner, format!("{} {}", status.bus, status.message))?;
     Ok(())
 }
 
 #[tauri::command]
 fn disconnect_bus(state: tauri::State<'_, ReceiverState>, bus: String) -> Result<(), String> {
-    stop_bus(&state.inner, &bus);
-    let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-    inner
-        .buses
-        .entry(bus.clone())
-        .and_modify(|stats| {
-            stats.status = "ready".to_string();
-            stats.message = "disconnected".to_string();
-        })
-        .or_insert(BusStats {
-            status: "ready".to_string(),
-            frames: 0,
-            errors: 0,
-            started_at: None,
-            current_load_bucket: None,
-            completed_load_buckets: VecDeque::new(),
-            completed_load_bucket_count: 0,
-            completed_load_occupied_ms: 0.0,
-            rate_buckets: VecDeque::new(),
-            worst_saturated_1s_ms: 0.0,
-            message: "disconnected".to_string(),
-        });
-    inner.event_log = format!("{bus} disconnected");
+    let path = format!("/api/v1/sessions/{SERVER_SESSION}/buses/{bus}/disconnect");
+    let status: ServerBusStatusDto = post_json(&path, &Value::Null)?;
+    set_event_log(&state.inner, format!("{} {}", status.bus, status.message))?;
     Ok(())
 }
 
 #[tauri::command]
 fn disconnect_all(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
-    let buses = {
-        let inner = state.inner.lock().map_err(|error| error.to_string())?;
-        inner.workers.keys().cloned().collect::<Vec<_>>()
-    };
+    let buses = fetch_server_buses()?;
     for bus in buses {
-        stop_bus(&state.inner, &bus);
+        if bus.status == "connected" || bus.status == "connecting" {
+            let path = format!(
+                "/api/v1/sessions/{SERVER_SESSION}/buses/{}/disconnect",
+                bus.bus
+            );
+            let _: ServerBusStatusDto = post_json(&path, &Value::Null)?;
+        }
     }
-    let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-    for stats in inner.buses.values_mut() {
-        stats.status = "ready".to_string();
-        stats.message = "disconnected".to_string();
-        stats.started_at = None;
-        stats.current_load_bucket = None;
-        stats.completed_load_buckets.clear();
-        stats.completed_load_bucket_count = 0;
-        stats.completed_load_occupied_ms = 0.0;
-        stats.rate_buckets.clear();
-    }
-    inner.event_log = "all buses disconnected".to_string();
+    set_event_log(&state.inner, "all buses disconnected".to_string())?;
     Ok(())
 }
 
@@ -407,45 +169,23 @@ fn disconnect_all(state: tauri::State<'_, ReceiverState>) -> Result<(), String> 
 fn clear_latest(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
     inner.latest = LatestFrameState::default();
-    for stats in inner.buses.values_mut() {
-        stats.frames = 0;
-        stats.errors = 0;
-        stats.current_load_bucket = None;
-        stats.completed_load_buckets.clear();
-        stats.completed_load_bucket_count = 0;
-        stats.completed_load_occupied_ms = 0.0;
-        stats.rate_buckets.clear();
-        stats.worst_saturated_1s_ms = 0.0;
-        if stats.status == "connected" {
-            stats.started_at = Some(Instant::now());
-        }
-    }
     inner.event_log = "latest frame view cleared".to_string();
     Ok(())
 }
 
 #[tauri::command]
 fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto, String> {
-    let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-    for stats in inner.buses.values_mut() {
-        if let Some(started_at) = stats.started_at {
-            stats.close_load_buckets_before(current_load_bucket_index(started_at));
-        }
-    }
-    let mut buses = inner
-        .buses
-        .iter()
-        .map(|(bus, stats)| BusStatusDto {
-            bus: bus.clone(),
-            status: stats.status.clone(),
-            frames: stats.frames,
-            errors: stats.errors,
-            rate_hz: stats.rate_hz(),
-            utilization_percent: stats.utilization_percent(),
-            saturated_last_1s_ms: stats.saturated_last_1s_ms(),
-            saturated_worst_1s_ms: stats.saturated_worst_1s_ms(),
-            message: stats.message.clone(),
-        })
+    ensure_stream_worker(&state.inner)?;
+
+    let server_buses = fetch_server_buses().unwrap_or_else(|error| {
+        let _ = set_event_log(&state.inner, format!("server snapshot failed: {error}"));
+        Vec::new()
+    });
+
+    let inner = state.inner.lock().map_err(|error| error.to_string())?;
+    let mut buses = server_buses
+        .into_iter()
+        .map(map_bus_status)
         .collect::<Vec<_>>();
     buses.sort_by(|a, b| a.bus.cmp(&b.bus));
 
@@ -465,7 +205,7 @@ fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto
                 data: frame.data_hex(),
                 flags: frame.flags_string(),
                 last_seen: format_system_time(frame.timestamp_host),
-                rate_hz: format_bucket_rate_hz(latest),
+                rate_hz: format_bucket_rate_hz(&latest.rate_buckets),
                 count: latest.receive_count,
                 raw: frame.raw.clone().unwrap_or_default(),
             }
@@ -480,108 +220,245 @@ fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto
     })
 }
 
-fn stop_bus(shared: &Arc<Mutex<ReceiverInner>>, bus: &str) {
-    let runtime = shared
-        .lock()
-        .ok()
-        .and_then(|mut inner| inner.workers.remove(bus));
-    if let Some(runtime) = runtime {
-        runtime.stop.store(true, Ordering::Relaxed);
-        let _ = runtime.handle.join();
+fn ensure_stream_worker(shared: &Arc<Mutex<ReceiverInner>>) -> Result<(), String> {
+    let mut inner = shared.lock().map_err(|error| error.to_string())?;
+    if inner.stream.is_some() {
+        return Ok(());
     }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let worker_shared = Arc::clone(shared);
+    let handle = thread::spawn(move || run_stream_worker(worker_shared, worker_stop));
+    inner.stream = Some(StreamRuntime { stop, handle });
+    inner.event_log = "server stream worker started".to_string();
+    Ok(())
 }
 
-fn update_bus_connected(shared: &Arc<Mutex<ReceiverInner>>, bus: &str) {
-    if let Ok(mut inner) = shared.lock() {
-        inner.buses.insert(bus.to_string(), BusStats::connected());
-        inner.event_log = format!("{bus} connected");
-    }
-}
-
-fn update_bus_error(shared: &Arc<Mutex<ReceiverInner>>, bus: &str, message: String) {
-    if let Ok(mut inner) = shared.lock() {
-        let stats = inner.buses.entry(bus.to_string()).or_default();
-        stats.status = "error".to_string();
-        stats.errors += 1;
-        stats.message = message.clone();
-        inner.event_log = format!("{bus} connection error: {message}");
-    }
-}
-
-fn nominal_bitrate_bps(code: &str) -> Result<u32, String> {
-    match code {
-        "S0" => Ok(10_000),
-        "S1" => Ok(20_000),
-        "S2" => Ok(50_000),
-        "S3" => Ok(100_000),
-        "S4" => Ok(125_000),
-        "S5" => Ok(250_000),
-        "S6" => Ok(500_000),
-        "S7" => Ok(800_000),
-        "S8" => Ok(1_000_000),
-        value => Err(format!("unsupported nominal bitrate: {value}")),
-    }
-}
-
-fn frame_rate_bucket_index(timestamp: SystemTime) -> Option<u64> {
-    timestamp
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|duration| (duration.as_millis() as u64) / FRAME_RATE_BUCKET_MS)
-}
-
-fn format_completed_window_rate_hz(buckets: &VecDeque<FrameRateBucket>) -> String {
-    let Some(current_bucket) = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|duration| (duration.as_millis() as u64) / FRAME_RATE_BUCKET_MS)
-    else {
-        return "-".to_string();
+fn run_stream_worker(shared: Arc<Mutex<ReceiverInner>>, stop: Arc<AtomicBool>) {
+    let stream_url = match server_endpoint() {
+        Ok(endpoint) => format!(
+            "{}/api/v1/sessions/{SERVER_SESSION}/stream?kind=gui",
+            endpoint.ws_base_url()
+        ),
+        Err(error) => {
+            update_stream_log(&shared, format!("server endpoint error: {error}"));
+            return;
+        }
     };
-    let count = buckets
-        .iter()
-        .filter(|bucket| {
-            bucket.index < current_bucket
-                && bucket.index + FRAME_RATE_WINDOW_BUCKETS >= current_bucket
+
+    while !stop.load(Ordering::Relaxed) {
+        match tungstenite::connect(&stream_url) {
+            Ok((mut socket, _response)) => {
+                update_stream_log(&shared, "server stream connected".to_string());
+                while !stop.load(Ordering::Relaxed) {
+                    match socket.read() {
+                        Ok(message) => handle_stream_message(&shared, message),
+                        Err(error) => {
+                            update_stream_log(
+                                &shared,
+                                format!("server stream disconnected: {error}"),
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                update_stream_log(&shared, format!("server stream waiting: {error}"));
+                thread::park_timeout(Duration::from_millis(500));
+            }
+        }
+    }
+}
+
+fn handle_stream_message(shared: &Arc<Mutex<ReceiverInner>>, message: Message) {
+    if !message.is_text() {
+        return;
+    }
+    let Ok(text) = message.into_text() else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        update_stream_log(shared, "server stream JSON parse failed".to_string());
+        return;
+    };
+    match value.get("event").and_then(Value::as_str) {
+        Some("hello") => update_stream_log(shared, "server stream hello".to_string()),
+        Some("frame") => match serde_json::from_value::<FrameEventDto>(value) {
+            Ok(event) => match frame_from_event(event) {
+                Ok(frame) => {
+                    if let Ok(mut inner) = shared.lock() {
+                        inner.latest.ingest(frame);
+                    }
+                }
+                Err(error) => update_stream_log(shared, format!("frame decode failed: {error}")),
+            },
+            Err(error) => update_stream_log(shared, format!("frame event parse failed: {error}")),
+        },
+        Some("diagnostic") => update_stream_log(shared, format!("server diagnostic: {text}")),
+        Some("closed") => update_stream_log(shared, format!("server stream closed: {text}")),
+        Some(_) | None => {}
+    }
+}
+
+fn frame_from_event(event: FrameEventDto) -> Result<CanFrame, String> {
+    let id_format = parse_id_format(&event.id_format)?;
+    let frame_format = parse_frame_format(&event.frame_format)?;
+    let frame_type = parse_frame_type(&event.frame_type)?;
+    let id = parse_can_id(&event.id)?;
+    let data = parse_hex_bytes(&event.data_hex)?;
+    let flags = event.flags.split(';').map(str::trim).collect::<Vec<_>>();
+    Ok(CanFrame {
+        bus: event.bus,
+        timestamp_host: parse_unix_ns(&event.timestamp_host_unix_ns),
+        timestamp_device: None,
+        direction: parse_direction(&event.direction)?,
+        id,
+        id_format,
+        frame_format,
+        frame_type,
+        dlc: event.dlc,
+        data_length: event.data_length,
+        data,
+        bitrate_switch: flags.iter().any(|flag| flag.eq_ignore_ascii_case("brs")),
+        error_state_indicator: flags.iter().any(|flag| flag.eq_ignore_ascii_case("esi")),
+        adapter: "server".to_string(),
+        raw: None,
+    })
+}
+
+fn parse_direction(value: &str) -> Result<Direction, String> {
+    match value {
+        "rx" => Ok(Direction::Rx),
+        "tx" => Ok(Direction::Tx),
+        _ => Err(format!("unknown direction: {value}")),
+    }
+}
+
+fn parse_id_format(value: &str) -> Result<IdFormat, String> {
+    match value {
+        "standard" => Ok(IdFormat::Standard),
+        "extended" => Ok(IdFormat::Extended),
+        _ => Err(format!("unknown id format: {value}")),
+    }
+}
+
+fn parse_frame_format(value: &str) -> Result<FrameFormat, String> {
+    match value {
+        "classic" => Ok(FrameFormat::Classic),
+        "fd" => Ok(FrameFormat::Fd),
+        _ => Err(format!("unknown frame format: {value}")),
+    }
+}
+
+fn parse_frame_type(value: &str) -> Result<FrameType, String> {
+    match value {
+        "data" => Ok(FrameType::Data),
+        "remote" => Ok(FrameType::Remote),
+        "error" => Ok(FrameType::Error),
+        _ => Err(format!("unknown frame type: {value}")),
+    }
+}
+
+fn parse_can_id(value: &str) -> Result<u32, String> {
+    u32::from_str_radix(value.trim_start_matches("0x").trim_start_matches("0X"), 16)
+        .map_err(|error| format!("invalid CAN ID {value}: {error}"))
+}
+
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
+    if !value.len().is_multiple_of(2) {
+        return Err(format!("hex payload length must be even: {value}"));
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&value[index..index + 2], 16)
+                .map_err(|error| format!("invalid payload byte at {index}: {error}"))
         })
-        .map(|bucket| bucket.count)
-        .sum::<u64>();
-    let window_seconds = (FRAME_RATE_BUCKET_MS * FRAME_RATE_WINDOW_BUCKETS) as f64 / 1000.0;
-    format!("{:.1}", count as f64 / window_seconds)
+        .collect()
 }
 
-fn current_load_bucket_index(started_at: Instant) -> u64 {
-    (started_at.elapsed().as_millis() as u64) / LOAD_BUCKET_MS as u64
-}
-
-fn sum_recent_saturated_ms(
-    buckets: &VecDeque<LoadBucket>,
-    current_bucket: u64,
-    bucket_count: u64,
-) -> f64 {
-    buckets
-        .iter()
-        .filter(|bucket| bucket.index + bucket_count > current_bucket)
-        .map(|bucket| (bucket.occupied_ms - LOAD_BUCKET_MS).max(0.0))
-        .sum()
-}
-
-fn estimate_occupied_ms(frame: &CanFrame, bitrate_bps: u32) -> f64 {
-    if bitrate_bps == 0 {
-        return 0.0;
-    }
-    estimate_wire_bits(frame) as f64 / f64::from(bitrate_bps) * 1000.0
-}
-
-fn estimate_wire_bits(frame: &CanFrame) -> u64 {
-    let base_bits = match (frame.frame_format, frame.id_format) {
-        (FrameFormat::Classic, IdFormat::Standard) => 47_u64,
-        (FrameFormat::Classic, IdFormat::Extended) => 67_u64,
-        (FrameFormat::Fd, IdFormat::Standard) => 61_u64,
-        (FrameFormat::Fd, IdFormat::Extended) => 81_u64,
+fn parse_unix_ns(value: &str) -> SystemTime {
+    let Ok(nanos) = value.parse::<u128>() else {
+        return SystemTime::now();
     };
-    let data_bits = (frame.data_length as u64) * 8;
-    base_bits + data_bits
+    let secs = (nanos / 1_000_000_000).min(u128::from(u64::MAX)) as u64;
+    let sub_nanos = (nanos % 1_000_000_000) as u32;
+    UNIX_EPOCH + Duration::new(secs, sub_nanos)
+}
+
+fn fetch_server_buses() -> Result<Vec<ServerBusStatusDto>, String> {
+    get_json(&format!("/api/v1/sessions/{SERVER_SESSION}/buses"))
+}
+
+fn map_bus_status(status: ServerBusStatusDto) -> BusStatusDto {
+    BusStatusDto {
+        bus: status.bus,
+        status: status.status,
+        frames: status.frames,
+        errors: status.errors,
+        rate_hz: "-".to_string(),
+        utilization_percent: "-".to_string(),
+        saturated_last_1s_ms: "-".to_string(),
+        saturated_worst_1s_ms: "-".to_string(),
+        message: status.message,
+    }
+}
+
+fn server_endpoint() -> Result<ServerEndpoint, String> {
+    SERVER_ENDPOINT
+        .parse::<ServerEndpoint>()
+        .map_err(|error| error.to_string())
+}
+
+fn get_json<T>(path: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let endpoint = server_endpoint()?;
+    let response = reqwest::blocking::get(format!("{}{}", endpoint.http_base_url(), path))
+        .map_err(|error| error.to_string())?;
+    parse_response(response)
+}
+
+fn post_json<T, B>(path: &str, body: &B) -> Result<T, String>
+where
+    T: DeserializeOwned,
+    B: Serialize + ?Sized,
+{
+    let endpoint = server_endpoint()?;
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(format!("{}{}", endpoint.http_base_url(), path))
+        .json(body)
+        .send()
+        .map_err(|error| error.to_string())?;
+    parse_response(response)
+}
+
+fn parse_response<T>(response: reqwest::blocking::Response) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let status = response.status();
+    let text = response.text().map_err(|error| error.to_string())?;
+    if !status.is_success() {
+        return Err(format!("server returned {status}: {text}"));
+    }
+    serde_json::from_str(&text).map_err(|error| format!("invalid server response: {error}"))
+}
+
+fn set_event_log(shared: &Arc<Mutex<ReceiverInner>>, message: String) -> Result<(), String> {
+    let mut inner = shared.lock().map_err(|error| error.to_string())?;
+    inner.event_log = message;
+    Ok(())
+}
+
+fn update_stream_log(shared: &Arc<Mutex<ReceiverInner>>, message: String) {
+    if let Ok(mut inner) = shared.lock() {
+        inner.event_log = message;
+    }
 }
 
 fn format_system_time(time: SystemTime) -> String {
@@ -594,8 +471,24 @@ fn format_system_time(time: SystemTime) -> String {
     }
 }
 
-fn format_bucket_rate_hz(latest: &canrush_core::server::LatestFrame) -> String {
-    format_completed_window_rate_hz(&latest.rate_buckets)
+fn format_bucket_rate_hz(buckets: &VecDeque<FrameRateBucket>) -> String {
+    let Some(current_bucket) = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| (duration.as_millis() as u64) / FRAME_RATE_BUCKET_MS)
+    else {
+        return "-".to_string();
+    };
+    let count = buckets
+        .iter()
+        .filter(|bucket| {
+            bucket.index < current_bucket
+                && bucket.index + GUI_RATE_WINDOW_BUCKETS >= current_bucket
+        })
+        .map(|bucket| bucket.count)
+        .sum::<u64>();
+    let window_seconds = (FRAME_RATE_BUCKET_MS * GUI_RATE_WINDOW_BUCKETS) as f64 / 1000.0;
+    format!("{:.1}", count as f64 / window_seconds)
 }
 
 fn main() {

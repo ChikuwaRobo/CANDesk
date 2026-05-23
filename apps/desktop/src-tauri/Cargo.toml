@@ -10,8 +10,11 @@ tauri-build = { version = "2.5.1", features = [] }
 
 [dependencies]
 canrush-core = { path = "../../../crates/canrush-core" }
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 tauri = { version = "2.9.3", features = [] }
+tungstenite = "0.28.0"
 
 [lints]
 workspace = true

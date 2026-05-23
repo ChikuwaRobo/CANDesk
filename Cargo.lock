@@ -364,9 +364,12 @@ name = "canrush-desktop"
 version = "0.1.0"
 dependencies = [
  "canrush-core",
+ "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
+ "tungstenite 0.28.0",
 ]
 
 [[package]]

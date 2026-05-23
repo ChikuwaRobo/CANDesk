@@ -32,7 +32,7 @@ type BusConfig = {
   bitrate: string;
   dataBitrate: string;
   listenOnly: boolean;
-  status: "idle" | "ready" | "connecting" | "connected" | "error";
+  status: "idle" | "ready" | "connecting" | "connected" | "disconnected" | "error";
   frames: number;
   errors: number;
   rateHz: string;
@@ -70,7 +70,7 @@ type FrameDetail = {
 
 type BusStatusDto = {
   bus: string;
-  status: BusConfig["status"] | "connecting";
+  status: BusConfig["status"];
   frames: number;
   errors: number;
   rate_hz: string;
@@ -105,6 +105,7 @@ type SnapshotDto = {
 type SortMode = "id" | "bus" | "recent";
 
 const dummyIds = [0x103, 0x110, 0x180, 0x201, 0x2a0, 0x305, 0x3f2, 0x420];
+const serverEndpointLabel = "local (127.0.0.1:49000)";
 
 const initialBuses: BusConfig[] = [
   {
@@ -347,7 +348,7 @@ function App() {
   const [debugDummy, setDebugDummy] = React.useState(false);
   const [paused, setPaused] = React.useState(false);
   const [connected, setConnected] = React.useState(false);
-  const [eventLog, setEventLog] = React.useState("GUI skeleton ready");
+  const [eventLog, setEventLog] = React.useState("server client ready");
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
 
@@ -500,6 +501,7 @@ function App() {
     const timer = window.setInterval(async () => {
       try {
         const snapshot = await invoke<SnapshotDto>("latest_snapshot");
+        setConnected(snapshot.buses.some((entry) => entry.status === "connected"));
         setBuses((current) =>
           current.map((bus) => {
             const status = snapshot.buses.find((entry) => entry.bus === bus.bus);
@@ -569,7 +571,7 @@ function App() {
       <header className="top-bar">
         <div>
           <h1>CANRush</h1>
-          <p>受信専用モニタ skeleton</p>
+          <p>Server: {serverEndpointLabel}</p>
         </div>
         <div className="toolbar" aria-label="main actions">
           <button type="button" onClick={refreshPorts} title="ポート再読み込み">
@@ -584,7 +586,7 @@ function App() {
             <Unplug size={16} />
             Disconnect
           </button>
-          <button type="button" title="CSV キャプチャ">
+          <button type="button" title="GUIキャプチャは後続実装" disabled>
             <Download size={16} />
             Capture CSV
           </button>

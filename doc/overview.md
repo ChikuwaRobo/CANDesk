@@ -993,6 +993,14 @@ GUI は次の順で、現在の Tauri backend 直接 adapter 接続から `canru
 
 GUI 移行時のテスト方針は、先に CLI / server API で動作を固定し、GUI は DTO 変換と表示更新だけを確認する。Tauri backend の役割は server process 管理と HTTP/WebSocket client に限定し、CAN adapter 制御を持たせない。
 
+今回の GUI server client 化では、Tauri backend が CAN adapter を直接 open する経路を削除し、GUI からの `connect_bus` / `disconnect_bus` / `disconnect_all` は `canrush-server` の HTTP API を呼ぶ形にした。受信フレームは `ws://127.0.0.1:49000/api/v1/sessions/default/stream?kind=gui` の WebSocket stream を購読し、Tauri backend 内の `LatestFrameState` へ取り込む。フロントエンドは従来通り約 30 Hz の `latest_snapshot` polling で表示するため、表示の更新頻度と受信処理の境界は分離したまま維持する。
+
+GUI の既定 server endpoint は当面 `local`、つまり `127.0.0.1:49000` とする。server の自動起動、remote endpoint の選択、認証、GUI からの capture 操作は後続実装に回す。現段階の GUI は、起動済み server に対する接続設定 UI と受信 monitor UI として扱う。GUI process は実デバイスの owner にならないため、GUI 表示中でも CLI client mode capture が同じ server stream を購読できる。
+
+Bus panel の frame count / error count は server の `BusStatusDto` を基準にする。bus load、saturated time、bus 全体 Hz は server 側 stats DTO と統合するまで GUI 上では `-` とする。各 CAN ID の Hz は WebSocket で受け取った frame event を GUI 側 latest state に積み、500 ms window 2 個分の完了 bucket から表示用に計算する。
+
+GUI 内 CSV capture は、CLI capture と同じ stream / formatter を使う設計にするため、今回の GUI server client 化では実装しない。画面上の Capture CSV ボタンは後続実装であることが分かるよう無効化した。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。
