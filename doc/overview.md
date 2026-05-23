@@ -64,7 +64,37 @@ CANRush は、CLI とデスクトップ GUI の両方から利用できる CAN �
 
 CAN デバイスまたは OS CAN interface を開く責務は `canrush-core` に集約する。CLI、Desktop Monitor GUI、Plot App は、同じ core API またはローカル IPC を通して CAN データへアクセスする。これにより、UI や CLI コマンドごとにアダプタ実装を重複させず、デバイスの取り合いや挙動差を避ける。
 
-初期段階では、CLI は `canrush-core` をプロセス内で直接利用して単独実行できることを優先する。GUI と CLI が同じ実デバイスを同時利用する段階では、同じ core をローカルサーバーまたはデスクトップアプリ内サーバーとして動かし、各クライアントがそのサーバーに接続する構成へ拡張する。ヘッドレス運用が必要になった場合も、同じ core を単独プロセスとして起動できるようにする。
+基本構成では、`canrush-server` を headless server process として起動し、GUI、CLI、Plot App は server に接続する client として扱う。GUI は通常 server とセットで起動・利用するが、server は GUI から独立して単独起動できるようにする。これにより、GUI なしの完全 CLI 運用、長時間 capture、将来のリモート接続に対応できる余地を残す。
+
+CLI 単独で adapter を直接開く Standalone mode は、開発時 smoke test、server なしの緊急 capture、adapter bring-up 用として残す。ただし通常運用では、GUI/CLI/Plot が同じ `canrush-server` の session を共有する Client mode を優先する。
+
+### CLI 実行モード
+
+CLI は、用途に応じて次の 2 モードに分ける。この区別は、GUI と CLI の併用仕様を決めるうえで必須である。
+
+| モード | 役割 | デバイス設定 | デバイスの open | 主な用途 |
+| --- | --- | --- | --- | --- |
+| Standalone mode | CLI 単独で adapter を開く | CLI 引数で指定する | CLI process | 開発時 smoke test、server なしの緊急 capture |
+| Client mode | 起動済み `canrush-server` の stream を購読する | server 側の session 設定を使う | server process | 通常運用、GUI 表示中の capture、monitor、stats、Plot live 入力 |
+
+現段階で実装済みなのは Standalone mode である。Windows のシリアルポートは通常 1 process が排他的に open するため、GUI が `COM3` / `COM85` を open している間に Standalone mode の CLI が同じ port を open して capture することはできない。
+
+GUI と CLI を併用する場合、bus の接続設定は `canrush-server` 側で行う。GUI は server の設定・接続操作 UI として振る舞い、CLI は `--port`、`--bitrate`、`--data-bitrate`、`--listen-only` を指定せず、既存 session の `--bus`、filter、duration、output だけを指定する。CLI は device owner ではなく subscriber として振る舞う。
+
+想定する CLI 例は次の通り。
+
+```text
+# Standalone mode
+canrush capture --adapter weact --port COM3 --bus CAN0 --bitrate S8 --listen-only --duration 10s --output capture.csv
+
+# Client mode
+canrush capture --server local --bus CAN0 --duration 10s --output capture.csv
+canrush stats --server 192.168.0.10:49000 --all-buses --duration 5s
+```
+
+Client mode では、CLI が接続設定を変更してはいけない。接続設定の変更、再接続、切断は server の制御 API に対する明示操作として分けるが、初期 Client mode では read-only に限定し、capture / stats / monitor だけを扱う。
+
+将来、server だけをデバイス側 PC に置き、GUI や CLI を同じ LAN 内の別 PC から使えるようにする。そのため IPC は local-only 前提で固定せず、transport と discovery を分けて扱う。初期実装は localhost だけでもよいが、API の概念は `server endpoint` として表現し、`local`、`host:port`、将来の discovery 名を同じ CLI option で扱えるようにする。
 
 ## サーバーの責務
 
@@ -112,12 +142,13 @@ CAN FD と Classical CAN が同じ CAN ID を使う可能性を考慮し、実�
 
 受信フレームは、サーバー内部のフレームストリームへ流す。GUI、CLI、将来のログ機能はこのストリームを購読する。
 
-CLI キャプチャは、サーバーへ接続して次の条件を指定する。
+CLI キャプチャは、Standalone mode では CLI が開いた adapter から、Client mode では Core server の frame stream から frame を取得する。どちらの mode でも capture 条件は次の通りに揃える。
 
 - キャプチャ時間
 - 対象バス。未指定なら全バス
 - CAN ID フィルタ。`--id` は単一 ID、`--id-range` は範囲指定とする
 - 最大取得件数。`--max-frames` に到達した場合は duration 前でも終了する
+- 最大出力データ量。Client mode では `--max-bytes` のような data size 上限を追加できるようにする
 - 出力形式。初期実装では CSV のみ
 - 受信フレームのみか、送信フレームも含めるか
 
@@ -150,6 +181,227 @@ CLI capture の filter 強化として、`--id`、`--id-range`、`--max-frames`�
 実機確認では、WeActStudio USB2CANFDV1 が `COM3` と `COM85` として認識された。`COM3` を `CAN0`、`COM85` を `CAN1` とし、`--bitrate S8 --data-bitrate Y2 --listen-only` でそれぞれ 2 秒 capture したところ、どちらも `--max-frames 100` に到達して `max-frames-reached` で終了した。出力 CSV は 100 行で、header と `classic/data/8 byte` の frame 表記が期待通りであることを確認した。さらに `COM3` で実受信した ID `0x202` に対して `--id 202 --max-frames 10` を指定し、出力 10 行すべてが `0x202` であることを確認した。
 
 CLI `check` は、指定 adapter の短時間接続診断として扱う。初期実装では adapter 名、bus、version、受信 frame 数、stop reason、status を出力する。fake adapter では `canrush check --adapter fake --bus CAN0 --duration 500ms --min-frames 1` により `status=ok` を確認する。WeAct 実機では `COM3` と `COM85` に対して `--bitrate S8 --data-bitrate Y2 --listen-only --duration 1s --min-frames 5` を実行し、どちらも 5 frame 受信して `status=ok` となることを確認した。`V` command の応答は受信負荷中に取得できない場合があるため、version は取得できた場合のみ表示し、取得できない場合は `-` とする。version 取得時は、残留 CAN frame 行を誤認しないよう、`V` で始まる応答だけを採用する。
+
+### GUI / CLI 併用仕様で明確にするべきこと
+
+Client mode の実装前に、次の点を決める必要がある。
+
+1. Core server の所在
+   - `canrush-server` は headless server process として独立させる。
+   - GUI は基本的に server とセットで使うが、server 単独でも起動できるようにする。
+   - GUI 起動時に server を自動起動するか、既存 server に接続するかは GUI 実装時に選べるようにする。
+
+2. IPC 方式
+   - 初期実装の transport は未決定とする。
+   - 将来 LAN 内の別 PC から GUI/CLI/Plot が接続できるよう、local-only IPC に閉じない。
+   - 候補は localhost/LAN TCP、HTTP/WebSocket、gRPC など。named pipe は Windows local-only 最適化としては候補だが、主設計にはしない。
+   - Plot App の live stream も同じ server endpoint から購読できる設計にする。
+   - GUI は Windows のみでよいが、CLI と `canrush-server` は Linux でも動作する余地を残す。特に server は Raspberry Pi 上で USB-CAN adapter を開き、同一 LAN 内の Windows GUI / CLI から接続できる構成を想定する。
+   - transport は、Windows GUI、Rust CLI、Linux/Raspberry Pi server の 3 者で同じ API を使えることを優先する。
+
+3. session discovery
+   - CLI は `--server local` または `--server host:port` のように明示 endpoint を受け取れるようにする。
+   - `local` の解決方法は transport と同時に決める。
+   - LAN discovery は後続対応とし、初期は明示 endpoint を優先する。
+   - default session はまず 1 つとし、複数 server / 複数 session 選択は後続対応にする。
+
+4. 権限と操作範囲
+   - 初期 Client mode は read-only とする。
+   - capture / stats / monitor / Plot live 購読のみを扱う。
+   - connect/disconnect/bitrate 変更は初期 Client mode では扱わない。
+   - GUI が server の設定 UI として接続設定を行い、CLI は同じ bus の設定を上書きしない。
+
+5. stream の開始点
+   - 初期 Client mode の capture は live のみとする。
+   - CLI コマンドが server に購読要求を送った後に届いた frame だけを保存する。
+   - server 側 ring buffer から過去 frame を含める機能は後続対応にする。
+
+6. backpressure と drop 方針
+   - server は受信処理を止めない。
+   - GUI はリアルタイム表示を優先し、表示限界を超えた frame drop を許容する。
+   - CLI capture はリアルタイム表示ではないため、drop をできるだけ小さくする。
+   - 初期方針は subscriber 種別ごとに queue 方針を分ける。GUI subscriber は小さめの bounded queue と latest state 優先、CLI capture subscriber は大きめの bounded queue と連続書き出し優先にする。
+   - それでも overflow した場合は dropped count を診断情報と capture summary に出す。
+
+7. timestamp と順序保証
+   - capture CSV の `timestamp_host` は server が frame を受け取った時刻を使う。
+   - GUI/CLI/Plot は表示用に独自の基準時刻 offset を持ってよい。例: capture 開始時刻を 0 秒として表示する。
+   - CSV 契約では絶対時刻を残し、相対時刻は viewer / plot 側の表示設定として扱う。
+   - 同一 timestamp の frame 順序を安定させるため、将来 stream sequence number を追加するか検討する。
+
+8. 終了理由とエラー表現
+   - Client mode の通常終了条件は duration または max frames とする。
+   - data size 上限も指定できるようにする。初期候補は `--max-bytes`。
+   - 基本的な error として、server unreachable、session not found、bus not found、permission denied、server disconnected、queue overflow を扱う。
+   - Standalone mode と Client mode で `source-ended` の意味が変わるため、Client mode では `server-disconnected`、`stream-closed`、`max-bytes-reached` などの終了理由を追加する。
+
+現段階で固める仕様は次の通り。
+
+- GUI が実デバイスを open している間、Standalone mode の CLI は同じ port を open しない。
+- GUI 併用時の CLI capture / stats / monitor は Client mode として実装する。
+- Client mode の CLI は、bus 接続設定を受け取るだけで変更しない。
+- Client mode の capture 条件は、Standalone mode と同じ `bus`、ID filter、duration、max frames、include tx、output を使う。
+- Client mode の capture には data size 上限を追加できるようにする。
+- 初期 Client mode は live frame のみを対象にし、過去 ring buffer の取得は後続対応にする。
+- GUI は drop 許容、CLI capture は drop 最小化を基本方針にする。
+- timestamp は server 側で付与し、GUI/CLI/Plot は表示用の相対時刻 offset を持ってよい。
+- Client mode の実装に入る前に、transport、session discovery、subscriber queue、終了理由を小さな fake stream test で決める。
+
+### Transport / discovery の決定方針
+
+transport と discovery は、次の順で決める。
+
+1. 先に API の種類を分ける。
+   - control API: server 状態、session 一覧、bus 一覧、capture 開始、stats 取得。
+   - stream API: raw frame、bus stats、diagnostics、将来の decoded signal。
+   - file API: capture CSV、将来の MCAP/RRD/export。
+
+2. 最小 prototype を 2 系統作って比較する。
+   - HTTP + WebSocket: control は HTTP、stream は WebSocket。
+   - gRPC streaming: control と stream を gRPC に統一。
+   - raw TCP 独自 protocol は、初期候補から外す。デバッグ、互換性、ブラウザ/Tauri 連携、将来の remote 利用で不利になりやすいためである。
+
+3. 評価基準を固定する。
+   - Windows GUI から扱いやすいこと。
+   - Rust CLI から扱いやすいこと。
+   - Linux/Raspberry Pi server で軽く動くこと。
+   - LAN 越しに接続できること。
+   - frame stream の backpressure / drop count を表現できること。
+   - API schema をテストしやすいこと。
+   - `curl` や一般的なツールで最低限の疎通確認ができること。
+   - 将来 Plot App が同じ stream を購読できること。
+
+初期推奨は HTTP + WebSocket とする。control API は HTTP JSON で始め、CLI や GUI からの状態確認、capture 要求、stats 取得を単純に扱う。frame stream は WebSocket に分け、JSON Lines または binary frame を後から選べるようにする。最初はデバッグ性を優先して JSON 形式で prototype し、高レート時の CPU/帯域が問題になった時点で binary encoding を追加する。
+
+gRPC は schema と streaming を統一しやすいが、Windows GUI の TypeScript 側や Tauri frontend から扱う場合に追加の bridge や gRPC-Web まわりの複雑さが出やすい。Rust CLI / Rust server だけなら有力なので、後で API が固まった段階で gRPC 版 transport を追加できるよう、core の stream model は transport 非依存に保つ。
+
+discovery は段階的に入れる。
+
+1. Phase 1: 明示 endpoint
+   - `canrush --server 192.168.0.10:49000 ...`
+   - `canrush --server local ...`
+   - `CANRUSH_SERVER=192.168.0.10:49000`
+   - 設定ファイルの default server。
+
+2. Phase 2: local helper
+   - GUI が最後に接続した server endpoint を保存する。
+   - CLI は設定ファイルまたは環境変数から default を読む。
+   - `canrush server status --server ...` で疎通確認できるようにする。
+
+3. Phase 3: LAN discovery
+   - mDNS / DNS-SD で `_canrush._tcp.local` のような service name を広告する。
+   - TXT record に server name、protocol version、auth required、capabilities を載せる。
+   - discovery は便利機能であり、接続先の明示指定を常に残す。
+
+network 公開時の初期安全方針は次の通り。
+
+- `canrush-server` は default では loopback のみに bind する。
+- LAN 公開は `--listen 0.0.0.0:49000` のような明示 option を必要とする。
+- 初期 Client mode は read-only だが、LAN 公開時は最低限の token 認証を検討する。
+- 将来 write 操作を remote から許可する場合は、read-only API と別権限にする。
+
+### Transport / server の実装レベル方針
+
+初期実装では、CAN 受信、集計、capture 条件判定などのドメイン処理は `canrush-core` に残し、HTTP / WebSocket の実装は独立した `canrush-server` binary に閉じ込める。`canrush-core` は Windows / Linux / Raspberry Pi のどこでも使える同期 API を優先し、`tokio` や HTTP server 依存を直接持たせない。これにより、CLI Standalone mode、Tauri backend、headless server が同じ core 型を共有できる。
+
+追加する workspace 単位は次を基本にする。
+
+| 単位 | 責務 | 主な依存 |
+| --- | --- | --- |
+| `canrush-core` | `CanFrame`、adapter、parser、capture、stats、frame hub の純粋ロジック | `serialport`、必要最小限の `serde` |
+| `canrush-server` | headless process、bus worker、subscriber queue、HTTP / WebSocket API | `canrush-core`、`clap`、`tokio`、`axum`、`serde_json` |
+| `canrush-cli` | Standalone mode と Client mode の CLI。Client mode では server を read-only 購読する | `canrush-core`、HTTP / WebSocket client |
+| `apps/desktop` | Windows GUI。最終的には local `canrush-server` を起動または既存 server に接続する | Tauri、TypeScript、server endpoint client |
+
+API の JSON schema は初期段階では `canrush-core::api` に置く。型が増え、GUI / CLI / Plot から独立して versioning したくなった時点で `canrush-api` crate へ分離する。schema 型は `serde` で serializable にし、protocol version を含める。
+
+server process の内部構造は次のように分ける。
+
+| 構成要素 | 責務 |
+| --- | --- |
+| `ServerRuntime` | process 全体の状態、protocol version、default session、起動時刻を持つ |
+| `SessionManager` | 初期は `default` session 1 個だけを管理する。将来複数 session に拡張できるよう ID を残す |
+| `BusWorker` | bus ごとに blocking thread を 1 本持ち、adapter から `CanFrame` を読み続ける |
+| `FrameHub` | 受信 frame に server sequence number を付け、latest state、stats、subscriber へ配信する |
+| `SubscriberRegistry` | GUI / CLI capture / Plot など subscriber 種別ごとの queue capacity と drop count を管理する |
+| `ApiRouter` | HTTP control endpoint と WebSocket stream endpoint を公開する |
+
+adapter の読み取りは当面 blocking thread でよい。serialport は blocking API が中心であり、ここを無理に async 化しない。HTTP / WebSocket 側だけ `tokio` runtime 上で動かし、bus worker から stream 配信層へは bounded queue で橋渡しする。server の受信処理は遅い client によって止めない。
+
+最初に固定する HTTP endpoint は次の範囲に限定する。
+
+| Method / path | 用途 | 権限 |
+| --- | --- | --- |
+| `GET /api/v1/status` | server 名、protocol version、起動時刻、read-only 状態を返す | read |
+| `GET /api/v1/sessions` | session 一覧を返す。初期は `default` のみ | read |
+| `GET /api/v1/sessions/default/buses` | bus 状態、接続設定、frame 数、error 数を返す | read |
+| `GET /api/v1/sessions/default/snapshot` | GUI polling 用の latest frame と bus stats snapshot を返す | read |
+| `POST /api/v1/sessions/default/buses/{bus}/connect` | GUI / local admin 用の接続操作 | admin |
+| `POST /api/v1/sessions/default/buses/{bus}/disconnect` | GUI / local admin 用の切断操作 | admin |
+
+CLI Client mode は read-only に限定するため、`capture`、`stats`、`monitor` は `GET` と WebSocket subscribe だけを使う。GUI は接続設定 UI として server の admin endpoint を使うが、LAN 公開時は token などの保護を要求する。初期実装では default bind を `127.0.0.1:49000` とし、`--listen 0.0.0.0:49000` が指定された場合だけ LAN 公開を許可する。
+
+WebSocket endpoint は次を初期形にする。
+
+```text
+GET /api/v1/sessions/default/stream?kind=capture&bus=CAN0&id=100&id_range=200-20F
+GET /api/v1/sessions/default/stream?kind=gui
+GET /api/v1/sessions/default/stream?kind=plot
+```
+
+接続直後に server は `hello` event を送る。以降は JSON event を 1 message 1 event として送る。
+
+| Event | 主なフィールド |
+| --- | --- |
+| `hello` | `protocol_version`、`server_name`、`session_id`、`queue_capacity` |
+| `frame` | `sequence`、`timestamp_host_unix_ns`、`bus`、`direction`、`id`、`id_format`、`frame_format`、`frame_type`、`dlc`、`data_length`、`flags`、`data_hex` |
+| `stats` | `sequence`、`bus`、`rate_hz`、`utilization_percent`、`saturated_last_1s_ms`、`saturated_worst_1s_ms` |
+| `diagnostic` | `severity`、`code`、`message`、`bus`、`dropped_count` |
+| `closed` | `reason`、`message` |
+
+`timestamp_host_unix_ns` は JSON number ではなく 10 進文字列にする。JavaScript 側の整数精度に依存しないためである。表示や CSV では既存仕様に合わせて秒 + millisecond へ変換する。client は必要に応じて capture 開始時刻を 0 とする相対時刻を持ってよい。
+
+subscriber queue は次の方針にする。
+
+| Subscriber kind | 初期 queue capacity | overflow 時の扱い |
+| --- | --- | --- |
+| `gui` | 小さめ。例: 256 events | drop 許容。latest snapshot で復帰できるようにする |
+| `capture` | 大きめ。例: 8192 events | drop count を記録し、CLI summary と diagnostic に出す |
+| `plot` | 中程度。例: 2048 events | plot 側で downsample / range load へ逃がす |
+
+どの subscriber でも queue overflow により bus worker を block しない。`capture` subscriber で overflow が起きた場合、CLI は capture を継続できるが、終了時 summary に `dropped_frames` を必ず表示する。必要であれば後続で `--fail-on-drop` を追加する。
+
+CLI Client mode の `capture` は、server 側にファイルを書かせず、CLI が WebSocket を購読して client 側の `--output` へ CSV を書く。これにより、server が Raspberry Pi 上にあり、CLI が Windows PC 上にある場合でも、出力先は CLI 実行環境のパスとして扱える。終了条件は `--duration`、`--max-frames`、`--max-bytes` とし、`--max-bytes` は CSV header と改行を含む実際の書き込み byte 数で判定する。
+
+Client mode で追加する終了理由は次を初期候補にする。
+
+| 終了理由 | 意味 |
+| --- | --- |
+| `duration-elapsed` | 指定時間に到達した |
+| `max-frames-reached` | 指定 frame 数に到達した |
+| `max-bytes-reached` | 出力 byte 数上限に到達した |
+| `server-disconnected` | server との接続が切れた |
+| `stream-closed` | server が stream を正常終了した |
+| `queue-overflow` | capture 中に drop が発生し、drop を致命扱いにした |
+
+discovery の実装は、まず endpoint 解決だけを入れる。
+
+1. CLI option の `--server` を読む。
+2. なければ `CANRUSH_SERVER` を読む。
+3. それもなければ `local` とみなし、`http://127.0.0.1:49000` に解決する。
+4. `local`、`host:port`、`http://host:port`、`ws://host:port` を同じ `ServerEndpoint` 型に正規化する。
+
+mDNS は Phase 3 まで入れない。ただし `ServerEndpoint` と `ServerIdentity` には、将来 discovery name、server name、capabilities、auth required を載せられる余地を残す。
+
+この実装単位で先に作るテストは次の通り。
+
+- `ServerEndpoint` parser の unit test。`local`、IPv4、hostname、scheme 付き endpoint、invalid endpoint を確認する。
+- API DTO の JSON golden test。`hello`、`frame`、`diagnostic` の列挙値と field 名を固定する。
+- fake `FrameHub` の subscriber test。複数 subscriber、filter、unsubscribe、queue overflow、drop count を確認する。
+- fake stream による CLI capture test。duration、max frames、max bytes、server disconnected を実機なしで確認する。
+- stats aggregator の bucket 境界 test。GUI と CLI が同じ `stats` module を使うことを確認する。
+
+実装順序は、`endpoint parser`、`api DTO`、`FrameHub subscriber`、`canrush-server status endpoint`、`WebSocket fake stream`、`CLI --server capture` の順にする。実デバイス接続を server に移すのはその後でよい。
 
 ## GUI の機能
 
@@ -652,25 +904,36 @@ CLI 優先フェーズの完了条件は次のように定義する。
 | 1 | CSV 契約の固定 | capture CSV header、時刻形式、ID 表記、flags、CAN FD 列の仕様固定 | CSV golden test、既存 capture test |
 | 2 | capture filter 強化 | `--bus`、`--id`、`--id-range`、`--duration`、`--max-frames`、終了理由 | fake adapter CLI integration test、異常引数 test |
 | 3 | CLI `check` | ポート列挙、短時間接続、firmware/version、初期化結果、受信可否 | fake serial test、parser error test、実機 smoke 手順 |
-| 4 | diagnostics model | command reject、timeout、parse error、receive error、dropped frame の共通構造 | diagnostics unit test、CLI 表示 snapshot test |
-| 5 | stats 集計 module | bus 別 Hz、Load、ID 数、error 数、bucket 集計 | bucket 境界 unit test、固定入力 stats test |
-| 6 | CLI `stats` / `monitor` | GUI なしで短時間の統計表示、一定間隔更新、終了 summary | fake adapter CLI test、出力 snapshot test |
-| 7 | capture reader | CSV capture を読み込む library、時刻順 iteration、bus/ID filter | sample capture 読み込み test、破損 CSV test |
-| 8 | plot event model | raw frame、bus stats、decoded signal 用の canonical event と topic 命名 | event 変換 unit test、schema/golden test |
-| 9 | plot file prototype | capture file から必要範囲を読み、downsample した series を返す CLI または library | range query test、downsample test |
-| 10 | live stream API 検討 | fake stream で subscribe、unsubscribe、backpressure、切断を扱う最小 API | fake stream integration test、再接続 test |
-| 11 | GUI 軽量反映 | CLI 診断・stats と同じ DTO を GUI に表示するだけの変更 | DTO 変換 test、TypeScript build |
-| 12 | CLI/core 送信検証 | `send` validation、fake adapter send、`direction=tx` の frame hub 反映 | validation unit test、fake send test、capture tx golden test |
+| 4 | execution mode 整理 | Standalone mode と Client mode の CLI 引数、禁止操作、終了理由、`--server`、`--max-bytes` | CLI argument unit test、doc test 相当の help 確認 |
+| 5 | live stream API 検討 | fake stream で subscribe、unsubscribe、backpressure、切断、subscriber 種別ごとの queue 方針を扱う最小 API | fake stream integration test、再接続 test、overflow test |
+| 6 | diagnostics model | command reject、timeout、parse error、receive error、dropped frame の共通構造 | diagnostics unit test、CLI 表示 snapshot test |
+| 7 | stats 集計 module | bus 別 Hz、Load、ID 数、error 数、bucket 集計 | bucket 境界 unit test、固定入力 stats test |
+| 8 | CLI `stats` / `monitor` | Standalone mode と将来 Client mode の両方に載せられる統計表示 | fake adapter CLI test、fake stream CLI test、出力 snapshot test |
+| 9 | capture reader | CSV capture を読み込む library、時刻順 iteration、bus/ID filter | sample capture 読み込み test、破損 CSV test |
+| 10 | plot event model | raw frame、bus stats、decoded signal 用の canonical event と topic 命名 | event 変換 unit test、schema/golden test |
+| 11 | plot file prototype | capture file から必要範囲を読み、downsample した series を返す CLI または library | range query test、downsample test |
+| 12 | GUI 軽量反映 | CLI 診断・stats と同じ DTO を GUI に表示するだけの変更 | DTO 変換 test、TypeScript build |
+| 13 | CLI/core 送信検証 | `send` validation、fake adapter send、`direction=tx` の frame hub 反映 | validation unit test、fake send test、capture tx golden test |
 
-この順序では、1 から 9 までがプロッタと外部ツールの土台になる。10 は独立 Plot App や GUI 統合拡張に進む前の API 検証であり、11 は GUI 表示だけの追従である。12 以降で初めて送信系へ入る。GUI 送信、定期送信、送信プリセット CSV は、CLI/core 送信検証が安定してから追加する。
+この順序では、1 から 11 までが GUI/CLI 併用、プロッタ、外部ツールの土台になる。5 の live stream API 検討は、実 IPC を決める前に fake stream で購読と backpressure の仕様を固める段階である。GUI 表示の追従はその後に行い、送信系はさらに後ろへ回す。GUI 送信、定期送信、送信プリセット CSV は、CLI/core 送信検証が安定してから追加する。
 
-直近の実装候補は次の 3 つに絞る。
+CSV 契約、`capture` filter、`check` コマンドが揃った後の直近実装候補は次の 4 つに絞る。
 
-1. CSV 契約固定と golden test の追加。
-2. `capture` の filter と終了理由の強化。
-3. `check` コマンドの追加。
+1. `ServerEndpoint` parser と CLI `--server` 引数の骨組み。
+2. `canrush-core::api` の DTO と JSON golden test。
+3. fake `FrameHub` subscriber と queue overflow test。
+4. `canrush-server` の `GET /api/v1/status` と `canrush server status --server ...`。
 
-この 3 つが揃うと、実機確認、プロッタ入力、将来の送信検証に必要な観測基盤が CLI だけで使えるようになる。
+この 4 つは実デバイス接続を server に移す前に完結できる。ここまでを固めると、Client mode capture、GUI の server 接続化、Plot live stream の実装範囲とテスト範囲が明確になる。
+
+上記 1 から 4 の CLI だけで確認できる骨組みとして、次を実装した。
+
+- `canrush-core::endpoint::ServerEndpoint` を追加し、`local`、`host:port`、`http://host:port`、`ws://host:port` を正規化する。
+- `canrush-core::api` を追加し、`ServerStatusDto`、`StreamHelloDto`、`FrameEventDto`、`DiagnosticEventDto` などの JSON DTO を定義した。`timestamp_host_unix_ns` は JSON number ではなく 10 進文字列で固定する。
+- `FrameHub` に subscriber を追加し、bus / CAN ID filter、unsubscribe、queue overflow の drop count を core の unit test で確認できるようにした。
+- `canrush-server` binary crate を追加し、`GET /api/v1/status` を提供する。default listen は `127.0.0.1:49000` とする。
+- `canrush-cli` に `--server` と `canrush server status --server ...` を追加した。`--server` 未指定時は `CANRUSH_SERVER`、それもなければ `local` に解決する。
+- Client mode capture は未実装のため、現時点で `canrush --server ... capture ...` を指定した場合は明示的にエラーにする。
 
 ### 6. 単発送信
 

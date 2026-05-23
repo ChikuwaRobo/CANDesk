@@ -3,7 +3,9 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod adapter;
+pub mod api;
 pub mod capture;
+pub mod endpoint;
 pub mod error;
 pub mod model;
 pub mod protocol;

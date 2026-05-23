@@ -9,7 +9,11 @@ repository.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
 serialport = "4.8.1"
+
+[dev-dependencies]
+serde_json = "1.0.145"
 
 [lints]
 workspace = true

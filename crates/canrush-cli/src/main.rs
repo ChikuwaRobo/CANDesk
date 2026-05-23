@@ -6,7 +6,9 @@ use std::time::Duration;
 use canrush_core::adapter::{
     list_serial_devices, FakeAdapter, FrameSource, WeActSerialAdapter, WeActSerialConfig,
 };
+use canrush_core::api::ServerStatusDto;
 use canrush_core::capture::{capture_from_source, write_csv_file, CanIdFilter, CaptureOptions};
+use canrush_core::endpoint::{parse_server_endpoint, ServerEndpoint};
 use canrush_core::error::{CanrushError, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -14,6 +16,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(name = "canrush")]
 #[command(about = "CANRush command line tools")]
 struct Cli {
+    #[arg(long, global = true)]
+    server: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -23,6 +28,7 @@ enum Commands {
     Capture(Box<CaptureArgs>),
     Check(Box<CheckArgs>),
     ListPorts,
+    Server(Box<ServerArgs>),
 }
 
 #[derive(Debug, Parser)]
@@ -100,6 +106,23 @@ struct CheckArgs {
     min_frames: usize,
 }
 
+#[derive(Debug, Parser)]
+struct ServerArgs {
+    #[command(subcommand)]
+    command: ServerCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ServerCommand {
+    Status(ServerStatusArgs),
+}
+
+#[derive(Debug, Parser)]
+struct ServerStatusArgs {
+    #[arg(long)]
+    server: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum AdapterKind {
     Fake,
@@ -116,9 +139,17 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Capture(args) => run_capture(*args),
+        Commands::Capture(args) => {
+            if cli.server.is_some() {
+                return Err(CanrushError::InvalidArgument(
+                    "Client mode capture is not implemented yet".to_string(),
+                ));
+            }
+            run_capture(*args)
+        }
         Commands::Check(args) => run_check(*args),
         Commands::ListPorts => run_list_ports(),
+        Commands::Server(args) => run_server_command(*args, cli.server.as_deref()),
     }
 }
 
@@ -238,6 +269,46 @@ fn run_list_ports() -> Result<()> {
     Ok(())
 }
 
+fn run_server_command(args: ServerArgs, global_server: Option<&str>) -> Result<()> {
+    match args.command {
+        ServerCommand::Status(args) => {
+            let endpoint = resolve_server_endpoint(args.server.as_deref(), global_server)?;
+            let status = fetch_server_status(&endpoint)?;
+            println!("endpoint={endpoint}");
+            println!("protocol_version={}", status.protocol_version);
+            println!("server_name={}", status.server_name);
+            println!("started_at_unix_ms={}", status.started_at_unix_ms);
+            println!("read_only={}", status.read_only);
+            println!("status=ok");
+            Ok(())
+        }
+    }
+}
+
+fn resolve_server_endpoint(
+    command_server: Option<&str>,
+    global_server: Option<&str>,
+) -> Result<ServerEndpoint> {
+    let endpoint = command_server
+        .or(global_server)
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("CANRUSH_SERVER").ok())
+        .unwrap_or_else(|| "local".to_string());
+    parse_server_endpoint(&endpoint)
+}
+
+fn fetch_server_status(endpoint: &ServerEndpoint) -> Result<ServerStatusDto> {
+    let url = format!("{}/api/v1/status", endpoint.http_base_url());
+    let response = reqwest::blocking::get(&url)
+        .map_err(|error| CanrushError::InvalidArgument(format!("server unreachable: {error}")))?;
+    let response = response.error_for_status().map_err(|error| {
+        CanrushError::InvalidArgument(format!("server status request failed: {error}"))
+    })?;
+    response
+        .json::<ServerStatusDto>()
+        .map_err(|error| CanrushError::InvalidArgument(format!("invalid server status: {error}")))
+}
+
 fn adapter_name(adapter: AdapterKind) -> &'static str {
     match adapter {
         AdapterKind::Fake => "fake",
@@ -326,5 +397,14 @@ mod tests {
     fn rejects_reversed_can_id_range() {
         let error = parse_id_filters(&[], &["0x200-0x100".to_string()]).unwrap_err();
         assert!(error.to_string().contains("start must be <= end"));
+    }
+
+    #[test]
+    fn resolves_server_endpoint_priority() {
+        let endpoint = resolve_server_endpoint(Some("192.168.0.10:49000"), Some("local")).unwrap();
+        assert_eq!(endpoint.to_string(), "192.168.0.10:49000");
+
+        let endpoint = resolve_server_endpoint(None, Some("local")).unwrap();
+        assert_eq!(endpoint.to_string(), "127.0.0.1:49000");
     }
 }
