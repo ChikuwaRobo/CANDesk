@@ -233,6 +233,7 @@ label {
 
 .table-tools {
   justify-content: space-between;
+  flex-wrap: wrap;
   margin-bottom: 10px;
 }
 
@@ -283,7 +284,7 @@ label {
 
 .frame-table {
   width: 100%;
-  min-width: 924px;
+  min-width: 814px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 13px;
@@ -314,27 +315,27 @@ label {
 }
 
 .frame-table .col-bus {
-  width: 60px;
+  width: 56px;
 }
 
 .frame-table .col-id {
-  width: 98px;
+  width: 86px;
 }
 
 .frame-table .col-data {
-  width: 520px;
+  width: 380px;
 }
 
 .frame-table .col-last {
-  width: 92px;
+  width: 82px;
 }
 
 .frame-table .col-rate {
-  width: 64px;
+  width: 138px;
 }
 
 .frame-table .col-count {
-  width: 76px;
+  width: 72px;
 }
 
 .frame-table th:nth-child(5),
@@ -351,6 +352,33 @@ label {
 
 .frame-table td.mono {
   letter-spacing: 0;
+}
+
+.rate-cell {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.rate-cell span {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+}
+
+.rate-bar-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe7ea;
+}
+
+.rate-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #196b7a;
 }
 
 .empty-table,

@@ -104,6 +104,8 @@ type SnapshotDto = {
 
 type SortMode = "id" | "bus" | "recent";
 
+const dummyIds = [0x103, 0x110, 0x180, 0x201, 0x2a0, 0x305, 0x3f2, 0x420];
+
 const initialBuses: BusConfig[] = [
   {
     bus: "CAN0",
@@ -279,12 +281,58 @@ function toFrameDetail(frame: LatestFrame): FrameDetail {
 }
 
 function sumNumericStrings(left: string, right: string) {
-  const leftValue = Number.parseFloat(left);
-  const rightValue = Number.parseFloat(right);
+  const leftValue = numericValue(left);
+  const rightValue = numericValue(right);
   if (Number.isNaN(leftValue) && Number.isNaN(rightValue)) {
     return "-";
   }
   return `${((Number.isNaN(leftValue) ? 0 : leftValue) + (Number.isNaN(rightValue) ? 0 : rightValue)).toFixed(1)}`;
+}
+
+function numericValue(value: string) {
+  return Number.parseFloat(value);
+}
+
+function rateBarWidthPercent(rateHz: string, maxRateHz: number) {
+  const value = numericValue(rateHz);
+  if (!Number.isFinite(value) || !Number.isFinite(maxRateHz) || maxRateHz <= 0) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, (value / maxRateHz) * 100));
+}
+
+function makeDummyFrame(bus: "CAN0" | "CAN1", id: number, index: number, tick: number): LatestFrame {
+  const idText = formatCanId(`0x${id.toString(16)}`, "standard");
+  const bytes = Array.from({ length: 8 }, (_, byteIndex) =>
+    ((id + tick + byteIndex * 17 + (bus === "CAN1" ? 31 : 0)) & 0xff)
+      .toString(16)
+      .toUpperCase()
+      .padStart(2, "0"),
+  );
+  const rateHz = ((index + 1) * (bus === "CAN0" ? 12.5 : 9.5) + (tick % 5) * 2).toFixed(1);
+  return {
+    rowKey: `${bus}-standard-classic-data-${idText}`,
+    bus,
+    id: idText,
+    idFormat: "standard",
+    frameFormat: "classic",
+    frameType: "data",
+    dlc: 8,
+    length: 8,
+    data: bytes.join(" "),
+    flags: "",
+    lastSeen: `${Math.floor(Date.now() / 1000)}.${String(Date.now() % 1000).padStart(3, "0")}`,
+    rateHz,
+    count: tick * (index + 1) * (bus === "CAN0" ? 3 : 2),
+    raw: `dummy:${bus}:${idText}:${bytes.join("")}`,
+  };
+}
+
+function makeDummyFrames(tick: number) {
+  return dummyIds.flatMap((id, index) => [
+    makeDummyFrame("CAN0", id, index, tick),
+    makeDummyFrame("CAN1", id, index, tick),
+  ]);
 }
 
 function App() {
@@ -296,6 +344,7 @@ function App() {
   const [query, setQuery] = React.useState("");
   const [sortMode, setSortMode] = React.useState<SortMode>("bus");
   const [mergeBuses, setMergeBuses] = React.useState(false);
+  const [debugDummy, setDebugDummy] = React.useState(false);
   const [paused, setPaused] = React.useState(false);
   const [connected, setConnected] = React.useState(false);
   const [eventLog, setEventLog] = React.useState("GUI skeleton ready");
@@ -309,9 +358,22 @@ function App() {
       return busMatches && queryMatches;
     })
     .sort((a, b) => compareFrames(a, b, sortMode));
+  const maxVisibleRateHz = Math.max(
+    0,
+    ...visibleFrames.map((frame) => numericValue(frame.rateHz)).filter(Number.isFinite),
+  );
 
   const selectedFrame =
-    displayFrames.find((frame) => frame.rowKey === selectedFrameId) ?? displayFrames[0];
+    visibleFrames.find((frame) => frame.rowKey === selectedFrameId) ?? visibleFrames[0];
+
+  React.useEffect(() => {
+    if (visibleFrames.length === 0) {
+      return;
+    }
+    if (!visibleFrames.some((frame) => frame.rowKey === selectedFrameId)) {
+      setSelectedFrameId(visibleFrames[0].rowKey);
+    }
+  }, [selectedFrameId, visibleFrames]);
 
   async function refreshPorts() {
     try {
@@ -431,7 +493,7 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    if (!hasTauriRuntime()) {
+    if (!hasTauriRuntime() || debugDummy) {
       return undefined;
     }
 
@@ -459,14 +521,6 @@ function App() {
         if (!paused) {
           const nextFrames = snapshot.frames.map(mapSnapshotFrame);
           setFrames(nextFrames);
-          if (nextFrames.length > 0) {
-            const selectedExists = nextFrames.some(
-              (frame) => frame.rowKey === selectedFrameId,
-            );
-            if (!selectedExists) {
-              setSelectedFrameId(nextFrames[0].rowKey);
-            }
-          }
         }
         if (snapshot.event_log) {
           setEventLog(snapshot.event_log);
@@ -477,7 +531,38 @@ function App() {
     }, 33);
 
     return () => window.clearInterval(timer);
-  }, [paused, selectedFrameId]);
+  }, [paused, debugDummy]);
+
+  React.useEffect(() => {
+    if (!debugDummy) {
+      return undefined;
+    }
+
+    let tick = 1;
+    const timer = window.setInterval(() => {
+      const nextFrames = makeDummyFrames(tick);
+      setConnected(true);
+      setBuses((current) =>
+        current.map((bus, index) => ({
+          ...bus,
+          status: "connected",
+          frames: tick * (index === 0 ? 390 : 315),
+          errors: 0,
+          rateHz: index === 0 ? "3900.0" : "3150.0",
+          utilizationPercent: index === 0 ? "58.4" : "47.1",
+          saturatedLast1sMs: index === 0 ? "0.0" : "0.0",
+          saturatedWorst1sMs: index === 0 ? "8.2" : "3.6",
+        })),
+      );
+      if (!paused) {
+        setFrames(nextFrames);
+      }
+      setEventLog("dummy data mode; adapter input is bypassed");
+      tick += 1;
+    }, 100);
+
+    return () => window.clearInterval(timer);
+  }, [debugDummy, paused]);
 
   return (
     <main className="app-shell">
@@ -619,6 +704,14 @@ function App() {
               />
               Merge buses
             </label>
+            <label className="checkbox-line table-toggle">
+              <input
+                type="checkbox"
+                checked={debugDummy}
+                onChange={(event) => setDebugDummy(event.target.checked)}
+              />
+              Dummy data
+            </label>
             <div className="segmented sort-segmented" role="group" aria-label="sort mode">
               {([
                 ["bus", "Bus"],
@@ -685,7 +778,19 @@ function App() {
                       <td>{frame.id}</td>
                       <td className="mono">{frame.data}</td>
                       <td>{frame.lastSeen}</td>
-                      <td>{frame.rateHz}</td>
+                      <td>
+                        <div className="rate-cell">
+                          <span>{frame.rateHz}</span>
+                          <div className="rate-bar-track" aria-hidden="true">
+                            <div
+                              className="rate-bar-fill"
+                              style={{
+                                width: `${rateBarWidthPercent(frame.rateHz, maxVisibleRateHz)}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </td>
                       <td>{frame.count.toLocaleString()}</td>
                     </tr>
                   );

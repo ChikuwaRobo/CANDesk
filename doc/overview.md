@@ -522,9 +522,17 @@ Latest frame table は、`Bus`、`ID`、`Recent` の 3 種類で並び替えで�
 
 CAN バス全体と各 CAN ID の `Hz` は、表示更新タイミングに依存させない。500 ms の固定 window で受信パケット数をカウントし、window が終わったらその window のカウントだけを履歴に残して次の window を開始する。周波数表示時は、現在進行中の window を含めず、過去 1 秒分の完了済み window のカウント合計を 1 秒で割った値を表示する。これにより、GUI が 30 Hz で更新されても、表示タイミングによって周波数計算の対象パケットが変わらないようにする。
 
+各 CAN ID の `Hz` 列には、数値の後ろにデータバーを表示する。バーは現在表示中の行における最大 Hz を 100% とした相対表示とし、絶対的な負荷ではなく、表示中 ID 同士の受信頻度の比較を目的とする。
+
+Latest frame table は 1200 px 程度のウィンドウ幅でも Hz データバーを表示できるよう、`Hz` 列に十分な固定幅を割り当て、`Data`、`Last`、`Count` は必要に応じて省略表示する。上部のテーブル操作群は幅が足りない場合に折り返し、テーブル本体のバー表示領域を優先する。
+
+デバッグ用に `Dummy data` トグルを用意する。ON の間は実 adapter からの snapshot 取得を止め、フロントエンド側で CAN0/CAN1 のダミーフレーム、Hz、Count、Load を定期更新する。実機なしでも、Hz データバー、Merge buses、Detail panel、スクロール、列幅の挙動を確認できるようにする。ダミーデータは表示確認専用であり、core の受信状態や実 adapter には流さない。
+
 `Merge buses` を有効にすると、Latest frame table は CAN0/CAN1 を区別せず、`id_format + frame_format + frame_type + CAN ID` をキーにして表示上の行を統合する。内部の受信状態、bus 別カウンタ、bus 別負荷計算は分離したまま保持する。統合表示では Bus 列を `ALL` とし、Count と Hz は各バスの値を合算し、payload と最終受信時刻は最も新しいフレームを表示する。
 
 Merge 表示中に統合行を選択した場合、Detail panel は統合行全体の最新 payload だけでなく、必要に応じて CAN0/CAN1 それぞれの payload、Hz、Count、raw line も並べて表示する。表示上は統合しても、詳細確認時にどのバスの値か追跡できるようにする。
+
+Detail panel の選択状態は、実受信フレームの `rowKey` ではなく、Merge buses やフィルタ適用後に実際に表示されている行の `rowKey` を基準に維持する。Merge 表示中は統合行の `ALL-...` キーが選択対象になるため、受信 snapshot 更新時に CAN0/CAN1 の元フレームだけを見て選択をリセットしてはいけない。
 
 Bus 設定は CAN FD 対応デバイスの設定をそのまま扱うため、data bitrate など FD 用項目を残す。一方、受信データリストは CAN 2.0 の監視を主眼にして、FD 専用の `Frame` と `Flags` 列は表示しない。CAN ID は標準 ID を 3 桁、拡張 ID を 8 桁の 0 埋め 16 進表記にすることで ID 表記だけで区別できるようにし、`ID fmt` 列も表示しない。DLC と Len は Data の byte 表示から読み取れるため、受信データリストでは表示しない。Detail panel では従来通り frame format、DLC、Len、raw line を表示する。内部データモデルと集約キーには `frame_format` と flags を残し、将来 CAN FD の詳細表示が必要になったときに復帰できるようにする。
 
