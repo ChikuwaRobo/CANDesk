@@ -154,6 +154,23 @@ CAN ID ごとの一覧では、次の列を表示する。
 
 初期方針としては、独立アプリ案に寄せたデータ契約を先に作る。後から統合拡張案へ寄せる場合も、受信モニタ GUI が Plot の内部状態や描画履歴を直接持たないようにする。
 
+### 既存可視化ツールからの参考方針
+
+Foxglove は、timestamp 付き message、schema、topic/channel、sink という構造で live visualization と file recording を統一している。SDK では MCAP writer と WebSocket server を sink として扱い、同じ channel からファイル保存とライブ表示へ同時に流せる。Foxglove WebSocket protocol を直接実装するより、現在は Foxglove SDK を使う方向が推奨されている。Custom data は MCAP、WebSocket、custom data loader で扱え、schema encoding は JSON Schema、Protobuf、FlatBuffers、ROS msg/IDL などに対応する。Foxglove extension は panel が topic を subscribe し、必要に応じて range loading や message converter を使う構成である。ただし range loading はメモリ使用量が増えやすいため、全期間プロットを panel 内だけで無制限に扱う設計は避ける。
+
+Rerun は、RecordingStream に対して entity path、timeline、archetype/component を log し、sink として gRPC viewer、`.rrd` file、stdout、memory などへ出力する構造である。Viewer は独立プロセスとして spawn/connect でき、`.rrd` file は後から Viewer で開ける。複数 rate のデータを timeline 上で扱い、Dataframe API で query/transform できる点は、CAN の raw frame と decode 済み signal を同じ時間軸で扱う設計の参考になる。一方で Rerun の archetype/component は画像、3D、ロボティクス向けの汎用可視化モデルなので、CAN 専用の ID 一覧、bit field、bus load、DBC 風 decode 表示を直接表すには、CANRush 側で専用データモデルを持つ必要がある。
+
+CANRush のプロッタは、両者の考え方から次の要素を取り入れる。
+
+- Canonical event: 受信フレーム、送信フレーム、decode 済み signal、bus stats を timestamp 付き event として扱う。
+- Channel/topic: `/can/CAN0/raw`、`/can/CAN0/id/0x123`、`/signal/CAN0/<name>` のように、Plot App が購読対象を選べる名前空間を用意する。
+- Schema: raw CAN frame、bus stats、decoded signal の schema を core 側で固定し、GUI 表示や Plot App の内部形式に依存させない。
+- Sink: live stream、CSV capture、将来の MCAP/RRD/Parquet などを sink として扱えるようにする。初期は CSV を安定させるが、プロッタ用途では schema と時系列 index を持てる形式を後から追加できるようにする。
+- Layout/blueprint: Plot App の表示設定は、データ本体とは別の設定ファイルとして保存する。capture file に UI 状態を混ぜない。
+- Range query: live 表示用の購読 API と、過去範囲を読む API を分ける。全期間プロットは Plot App 側で downsample、windowing、range loading を制御する。
+
+初期実装では、Foxglove や Rerun そのものを必須依存にしない。まず CANRush 独自の raw frame CSV と live stream API を安定させ、必要になった時点で `export mcap`、`export rrd`、または Foxglove/Rerun bridge を CLI サブコマンドとして追加する。これにより、CANRush のプロッタを独立アプリとして作る場合も、受信モニタ GUI から起動する統合拡張として扱う場合も、同じデータ契約を使い回せる。
+
 ## 受信専用 GUI 構成
 
 当面の GUI は受信専用に限定する。送信、定期送信、送信プリセット編集、DBC 読み込み、プロットは初期 GUI から外す。最初の目的は、2 台の WeActStudio USB2CANFDV1 を 1 Mbps で接続し、`CAN0` と `CAN1` の受信状態を同一画面で安定して観測できることである。
@@ -562,6 +579,70 @@ Bus 設定は CAN FD 対応デバイスの設定をそのまま扱うため、da
 7. 送信系: まず CLI 送信または core API の送信検証を行い、その後に GUI 送信へ進む。送信済みフレームは `direction=tx` として frame hub と capture に流せる形にする。
 
 GUI 内ログ、GUI 送信、GUI 統合プロット、DBC 読み込みはこの後に回す。まず CLI と capture file を安定させ、外部アプリやプロット機能が依存できるデータ面の契約を固める。
+
+### 5.6. 小単位実装とテスト方針
+
+今後の実装は、仕様変更時に「変更する範囲」と「テストする範囲」が明示できる単位に分ける。GUI 上の見た目や操作を直接大きく変更する前に、core のデータ構造、CLI、ファイル形式、集計ロジックを小さく固める。可能な限り、自動テストまたは CLI だけで検証できる形にする。
+
+基本方針は次の通り。
+
+- データ契約を先に固定する。`CanFrame`、capture CSV、bus stats、plot event などは GUI 表示から独立した schema として扱う。
+- 機能追加は vertical slice にする。例: `ID filter` は core filter、CLI option、capture test、doc を 1 単位にし、GUI 反映は必要になってから別単位にする。
+- GUI は薄く保つ。GUI 固有の状態は表示条件と選択状態に限定し、集計、capture、decode、plot 用 downsample は core または専用 module でテストする。
+- 実機依存テストは smoke test として分離する。通常の `cargo test` は fake adapter と固定入力で完結させる。
+- ファイル形式は golden test を持つ。CSV header、ID 表記、timestamp、flags の変更は snapshot/golden の差分で検出する。
+- 仕様変更時は、該当する影響範囲表を更新してから実装する。テスト対象が曖昧な変更は分割する。
+
+変更範囲とテスト範囲の対応は次を基準にする。
+
+| 変更対象 | 主な変更範囲 | 必須テスト |
+| --- | --- | --- |
+| `CanFrame` / CAN ID / DLC / flags | `model`、parser、capture formatter、GUI DTO、plot event | parser unit test、DLC 変換 test、CSV golden test、DTO 変換 test |
+| WeAct / slcan protocol | `protocol`、`adapter` | 行 parser unit test、送信行生成 test、fake serial adapter test、CLI `check` の fake test |
+| capture CSV | `capture`、CLI `capture`、doc、plot file reader | CSV golden test、CLI fake adapter integration test、plot reader test |
+| bus stats / Hz / Load | `server` / stats module、CLI `stats`、GUI snapshot DTO | bucket 集計 unit test、CLI stats fake input test、境界 window test |
+| CLI option | `canrush-cli`、該当 core API | CLI integration test、異常引数 test、help text smoke test |
+| GUI 表示のみ | `apps/desktop/src` | TypeScript build、変換関数 test、必要時のみブラウザ確認 |
+| Plot file reader | plot module / future `canrush-plot` | sample capture 読み込み test、range query test、downsample test |
+| live stream / IPC | server API、client SDK、CLI/GUI/Plot 接続部 | protocol unit test、fake stream integration test、切断・再接続 test |
+| 送信 API | `tx`、adapter、frame hub、CLI send | validation unit test、fake adapter send test、`direction=tx` capture test |
+
+CLI 優先フェーズの完了条件は次のように定義する。
+
+1. 各 CLI サブコマンドは fake adapter で自動テストできる。
+2. 実機が必要な確認は `ignored` test または手動 smoke command として分離されている。
+3. CSV や将来の plot event など、外部入力になり得る形式は golden test を持つ。
+4. 新しい GUI 機能は、GUI なしで検証できる core/CLI のテストが先に存在する。
+5. ドキュメントには、変更したデータ契約、CLI の使い方、テスト対象を残す。
+
+### 5.7. CLI 優先フェーズの実装順
+
+受信 GUI 完了後の実装は、次の順に進める。各段階は小さく閉じ、GUI 手動確認を必須にしない。GUI へ反映する場合も、先に core/CLI で動作を固定してから表示だけを追加する。
+
+| 順序 | 実装単位 | 主な成果物 | 必須テスト |
+| --- | --- | --- | --- |
+| 1 | CSV 契約の固定 | capture CSV header、時刻形式、ID 表記、flags、CAN FD 列の仕様固定 | CSV golden test、既存 capture test |
+| 2 | capture filter 強化 | `--bus`、`--id`、`--id-range`、`--duration`、`--max-frames`、終了理由 | fake adapter CLI integration test、異常引数 test |
+| 3 | CLI `check` | ポート列挙、短時間接続、firmware/version、初期化結果、受信可否 | fake serial test、parser error test、実機 smoke 手順 |
+| 4 | diagnostics model | command reject、timeout、parse error、receive error、dropped frame の共通構造 | diagnostics unit test、CLI 表示 snapshot test |
+| 5 | stats 集計 module | bus 別 Hz、Load、ID 数、error 数、bucket 集計 | bucket 境界 unit test、固定入力 stats test |
+| 6 | CLI `stats` / `monitor` | GUI なしで短時間の統計表示、一定間隔更新、終了 summary | fake adapter CLI test、出力 snapshot test |
+| 7 | capture reader | CSV capture を読み込む library、時刻順 iteration、bus/ID filter | sample capture 読み込み test、破損 CSV test |
+| 8 | plot event model | raw frame、bus stats、decoded signal 用の canonical event と topic 命名 | event 変換 unit test、schema/golden test |
+| 9 | plot file prototype | capture file から必要範囲を読み、downsample した series を返す CLI または library | range query test、downsample test |
+| 10 | live stream API 検討 | fake stream で subscribe、unsubscribe、backpressure、切断を扱う最小 API | fake stream integration test、再接続 test |
+| 11 | GUI 軽量反映 | CLI 診断・stats と同じ DTO を GUI に表示するだけの変更 | DTO 変換 test、TypeScript build |
+| 12 | CLI/core 送信検証 | `send` validation、fake adapter send、`direction=tx` の frame hub 反映 | validation unit test、fake send test、capture tx golden test |
+
+この順序では、1 から 9 までがプロッタと外部ツールの土台になる。10 は独立 Plot App や GUI 統合拡張に進む前の API 検証であり、11 は GUI 表示だけの追従である。12 以降で初めて送信系へ入る。GUI 送信、定期送信、送信プリセット CSV は、CLI/core 送信検証が安定してから追加する。
+
+直近の実装候補は次の 3 つに絞る。
+
+1. CSV 契約固定と golden test の追加。
+2. `capture` の filter と終了理由の強化。
+3. `check` コマンドの追加。
+
+この 3 つが揃うと、実機確認、プロッタ入力、将来の送信検証に必要な観測基盤が CLI だけで使えるようになる。
 
 ### 6. 単発送信
 
