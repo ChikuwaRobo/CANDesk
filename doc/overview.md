@@ -945,6 +945,8 @@ CSV 契約、`capture` filter、`check` コマンドが揃った後の直近実�
 - Client mode capture の初期終了条件として `--duration`、`--max-frames`、`--max-bytes` を実装した。
 - 実プロセス確認として、`canrush-server --listen 127.0.0.1:49002` を起動し、`canrush --server 127.0.0.1:49002 capture --all-buses --duration 2s --max-frames 2 --output target\client-capture.csv` で 2 frame の CSV 出力を確認した。
 
+その後、WebSocket stream の送信元を直接 `FakeAdapter` から読む形ではなく、`FrameHub` subscriber 経由に変更した。現在は WebSocket 接続ごとに `FrameHub` へ subscribe し、fake frame を hub へ publish して、subscription から取り出した `SequencedFrame` を `frame` event として送る。これにより、次段階で fake publish 部分を実 bus worker へ置き換えるだけで、WebSocket / CLI capture 側の境界を維持できる。実プロセス確認として、`canrush-server --listen 127.0.0.1:49003` と `canrush --server 127.0.0.1:49003 capture --all-buses --duration 2s --max-frames 2 --output target\client-capture-hub.csv` で 2 frame の CSV 出力を確認した。
+
 ### 6. 単発送信
 
 受信表示が安定してから単発送信を追加する。listen-only 中は送信 UI を無効化し、capability に従って CAN FD、BRS、RTR の入力可否を切り替える。
