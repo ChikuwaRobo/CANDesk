@@ -933,7 +933,17 @@ CSV 契約、`capture` filter、`check` コマンドが揃った後の直近実�
 - `FrameHub` に subscriber を追加し、bus / CAN ID filter、unsubscribe、queue overflow の drop count を core の unit test で確認できるようにした。
 - `canrush-server` binary crate を追加し、`GET /api/v1/status` を提供する。default listen は `127.0.0.1:49000` とする。
 - `canrush-cli` に `--server` と `canrush server status --server ...` を追加した。`--server` 未指定時は `CANRUSH_SERVER`、それもなければ `local` に解決する。
-- Client mode capture は未実装のため、現時点で `canrush --server ... capture ...` を指定した場合は明示的にエラーにする。
+- この時点では Client mode capture 本体は未実装で、`canrush --server ... capture ...` は明示的にエラーにしていた。
+
+続けて、Client mode capture の最小実装として fake WebSocket stream を追加した。
+
+- `canrush-server` は `GET /api/v1/sessions/default/stream?kind=capture...` を WebSocket endpoint として公開する。
+- 現時点の stream source は実 adapter ではなく `FakeAdapter::sample()` である。実 bus worker / `FrameHub` subscriber への接続は次段階で行う。
+- WebSocket 接続直後に `hello` event を送り、その後 `frame` event を JSON message として送る。
+- stream query は `bus`、複数 `id`、複数 `id_range` を受け取る。
+- `canrush --server host:port capture ...` は WebSocket stream を購読し、server 側ではなく CLI 実行側の `--output` に CSV を書く。
+- Client mode capture の初期終了条件として `--duration`、`--max-frames`、`--max-bytes` を実装した。
+- 実プロセス確認として、`canrush-server --listen 127.0.0.1:49002` を起動し、`canrush --server 127.0.0.1:49002 capture --all-buses --duration 2s --max-frames 2 --output target\client-capture.csv` で 2 frame の CSV 出力を確認した。
 
 ### 6. 単発送信
 
