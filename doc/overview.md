@@ -371,31 +371,109 @@ CAN ID ごとの一覧では、次の列を表示する。
 
 プロット機能は、受信モニタ GUI 本体へ多機能に組み込まない。GUI 本体はリアルタイム一覧、接続状態、基本 detail 表示を中心に保ち、ログ、送信、高度なプロットは別機能として扱う。
 
-プロット機能は、独立性の高いアプリケーションとしても、GUI 的に統合された拡張機能としても成立するように、まずデータ境界を明確にする。Plot 側は CAN デバイスを直接開かず、core が公開する live frame stream、capture file、将来の decoded signal stream を入力にする。プロットに必要な履歴リングバッファ、対象信号選択、表示設定、描画負荷は Plot 側へ閉じ込め、受信モニタ GUI の安定性に影響させない。
+プロット機能は `CANRush -> Parser -> Plotter` の 3 部構成として仕様化する。各部の責務は次の通り。
 
-プロットの提供形態は次の 2 案を比較しながら進める。
+| 部品 | 責務 | 入力 | 出力 |
+| --- | --- | --- | --- |
+| CANRush | adapter 接続、raw frame stream、capture file、bus stats を提供する | USB-CAN adapter / OS CAN interface | `CanFrame` stream、CSV capture、server API |
+| Parser | raw frame から signal series を生成する。パース設定を管理する | `CanFrame` stream / capture file、parse config | `SignalSample` stream、parser diagnostics |
+| Plotter | signal / raw frame / stats を選択して表示する。プロットレイアウトを管理する | `SignalSample` stream、raw frame、stats、plot layout | plot view、layout file |
 
-- 独立アプリ案: `canrush-plot` を受信モニタとは別プロセス、別ウィンドウ、別 package として用意する。live stream と CSV capture の両方を入力にできる。描画負荷や UI 複雑性を分離しやすく、オフライン解析ツールとしても使いやすい。
-- 統合拡張案: 受信モニタ GUI から起動できる拡張画面または別ウィンドウとして Plot を提供する。GUI 的には一体に見えるが、内部的には stream API を購読する別モジュールとして扱う。bus 選択や接続状態を共有しやすい一方、release、状態同期、UI 責務の境界が曖昧になりやすい。
-
-初期方針としては、独立アプリ案に寄せたデータ契約を先に作る。後から統合拡張案へ寄せる場合も、受信モニタ GUI が Plot の内部状態や描画履歴を直接持たないようにする。
+Parser と Plotter は完全に独立させる。Parser は「CAN payload を意味のある値へ変換する」責務だけを持ち、Plotter は「どの値を、どの表示形式で、どの軸に、どの補正をかけて表示するか」を持つ。スケールとオフセットは、信号定義として物理値へ変換するものは parse config に置き、表示上の比較や見やすさのための補正は plot layout に置く。
 
 ### 既存可視化ツールからの参考方針
 
-Foxglove は、timestamp 付き message、schema、topic/channel、sink という構造で live visualization と file recording を統一している。SDK では MCAP writer と WebSocket server を sink として扱い、同じ channel からファイル保存とライブ表示へ同時に流せる。Foxglove WebSocket protocol を直接実装するより、現在は Foxglove SDK を使う方向が推奨されている。Custom data は MCAP、WebSocket、custom data loader で扱え、schema encoding は JSON Schema、Protobuf、FlatBuffers、ROS msg/IDL などに対応する。Foxglove extension は panel が topic を subscribe し、必要に応じて range loading や message converter を使う構成である。ただし range loading はメモリ使用量が増えやすいため、全期間プロットを panel 内だけで無制限に扱う設計は避ける。
+Foxglove は、timestamp 付き message、schema、channel/topic、sink という構造で live visualization と file recording を統一している。layout は panel の配置、設定、変数を含む JSON として扱われ、panel ごとの設定も JSON として import/export できる。Custom data は MCAP 変換、custom data loader、Foxglove SDK による live connection で扱え、extension では custom panel、message converter、topic alias、data loader を分離している。
 
-Rerun は、RecordingStream に対して entity path、timeline、archetype/component を log し、sink として gRPC viewer、`.rrd` file、stdout、memory などへ出力する構造である。Viewer は独立プロセスとして spawn/connect でき、`.rrd` file は後から Viewer で開ける。複数 rate のデータを timeline 上で扱い、Dataframe API で query/transform できる点は、CAN の raw frame と decode 済み signal を同じ時間軸で扱う設計の参考になる。一方で Rerun の archetype/component は画像、3D、ロボティクス向けの汎用可視化モデルなので、CAN 専用の ID 一覧、bit field、bus load、DBC 風 decode 表示を直接表すには、CANRush 側で専用データモデルを持つ必要がある。
+PlotJuggler は時系列可視化に特化し、layout / configuration を保存して再利用できること、データ入力を plugin として拡張できること、Transform Editor や Lua ベースの custom function で時系列を加工できることが参考になる。CANRush ではこの考え方を取り入れ、raw frame の入力、signal parser、plot 上の transform / scale / offset を混ぜず、段階ごとに保存単位とテスト単位を分ける。
 
-CANRush のプロッタは、両者の考え方から次の要素を取り入れる。
+初期実装では、Foxglove や PlotJuggler そのものを必須依存にしない。まず CANRush 独自の raw frame CSV、live stream API、parse config、plot layout を安定させる。必要になった時点で `export mcap`、Foxglove custom data loader、PlotJuggler 向け CSV / plugin、または bridge CLI を追加する。
 
-- Canonical event: 受信フレーム、送信フレーム、decode 済み signal、bus stats を timestamp 付き event として扱う。
-- Channel/topic: `/can/CAN0/raw`、`/can/CAN0/id/0x123`、`/signal/CAN0/<name>` のように、Plot App が購読対象を選べる名前空間を用意する。
-- Schema: raw CAN frame、bus stats、decoded signal の schema を core 側で固定し、GUI 表示や Plot App の内部形式に依存させない。
-- Sink: live stream、CSV capture、将来の MCAP/RRD/Parquet などを sink として扱えるようにする。初期は CSV を安定させるが、プロッタ用途では schema と時系列 index を持てる形式を後から追加できるようにする。
-- Layout/blueprint: Plot App の表示設定は、データ本体とは別の設定ファイルとして保存する。capture file に UI 状態を混ぜない。
-- Range query: live 表示用の購読 API と、過去範囲を読む API を分ける。全期間プロットは Plot App 側で downsample、windowing、range loading を制御する。
+### Parser 仕様
 
-初期実装では、Foxglove や Rerun そのものを必須依存にしない。まず CANRush 独自の raw frame CSV と live stream API を安定させ、必要になった時点で `export mcap`、`export rrd`、または Foxglove/Rerun bridge を CLI サブコマンドとして追加する。これにより、CANRush のプロッタを独立アプリとして作る場合も、受信モニタ GUI から起動する統合拡張として扱う場合も、同じデータ契約を使い回せる。
+Parser は raw CAN frame から signal sample を生成する。初期 parser は lightweight な CANRush 独自設定を扱い、DBC 読み込みは後続対応にする。DBC を追加する場合も、内部表現は同じ parse config model へ変換する。
+
+parse config はファイルとして保存し、plot layout から独立させる。拡張子候補は `.canrush-parse.json` とする。含める情報は次の通り。
+
+| 項目 | 内容 |
+| --- | --- |
+| `version` | parse config schema version |
+| `name` | 設定名 |
+| `frame_selectors` | `bus`、`id`、`id_format`、`frame_format`、`frame_type` |
+| `signals` | signal 定義の配列 |
+| `signal.name` | signal 名。Plotter の選択対象になる stable id |
+| `signal.source` | byte offset、bit offset、bit length、endian、signed/unsigned、data type |
+| `signal.conversion` | 物理値変換用の scale、offset、unit、enum map |
+| `signal.validity` | optional な min/max、invalid value、counter / checksum 判定 |
+| `diagnostics` | parse error、missing frame、length mismatch の扱い |
+
+Parser の出力は `SignalSample` とする。最低限の項目は `timestamp_host`、`bus`、`frame_id`、`signal_id`、`name`、`value`、`unit`、`quality`、`source_sequence` とする。`quality` は `ok`、`stale`、`invalid`、`parse-error` のような値を持たせ、Plotter が表示対象から除外するか、警告付きで表示するかを選べるようにする。
+
+Parser は live と offline の両方で同じ結果を返す必要がある。固定の capture CSV と parse config を入力したとき、同じ `SignalSample` 列が得られることを golden test で確認する。
+
+### Plotter 仕様
+
+Plotter は raw frame、bus stats、SignalSample を時系列として表示する。入力は live stream と capture file の両方を扱う。Plotter は CAN adapter を開かず、CANRush server API、capture file、Parser 出力だけを参照する。
+
+plot layout は parse config から独立したファイルとして保存する。拡張子候補は `.canrush-layout.json` とする。含める情報は次の通り。
+
+| 項目 | 内容 |
+| --- | --- |
+| `version` | layout schema version |
+| `name` | layout 名 |
+| `data_bindings` | 参照する signal id、raw frame topic、bus stats topic |
+| `panels` | plot panel、table panel、raw frame panel などの配置 |
+| `series` | panel 内の系列。色、線種、表示名、scale、offset、axis、unit override |
+| `axes` | Y 軸名、単位、範囲、自動/固定、左右配置 |
+| `time` | 表示範囲、追従モード、同期グループ |
+| `transforms` | 表示用 derivative、moving average、低域フィルタ、差分、複数系列の演算 |
+| `selection` | 表示対象 bus、signal、ID filter |
+
+Plotter GUI は次の操作を持つ。
+
+- parse config の選択、読み込み、保存、別名保存。
+- parse config editor。signal 定義、byte/bit位置、型、endian、scale、offset、unit を編集する。
+- plot layout の選択、読み込み、保存、別名保存。
+- signal browser。bus、CAN ID、signal name、unit、更新有無で検索する。
+- plot target selector。選択した signal / raw frame / stats を panel へ追加する。
+- series editor。色、表示名、軸、表示用 scale、offset、unit override、線種を調整する。
+- panel layout editor。panel の追加、分割、タブ化、削除、同期グループ設定を行う。
+- live / offline 切り替え。live では server stream、offline では capture file と parse config を使う。
+
+表示上の scale / offset は plot layout に保存する。これは「同じ signal を別 layout で別スケール表示する」ためであり、Parser の物理値変換を破壊しない。たとえば ADC raw 値を電圧へ変換する scale は parse config、左右輪速を同じ軸に重ねるための表示倍率やゼロ点補正は plot layout に置く。
+
+### データ境界と topic 命名
+
+CANRush server の stream は raw frame を基準にし、Parser はそこから signal topic を生成する。topic 命名は次を候補にする。
+
+| 種別 | topic 例 |
+| --- | --- |
+| raw bus frame | `/can/CAN0/raw` |
+| raw CAN ID | `/can/CAN0/id/0x123` |
+| bus stats | `/stats/CAN0/load`、`/stats/CAN0/rate` |
+| parsed signal | `/signal/CAN0/<signal_name>` |
+| parser diagnostics | `/parser/<config_name>/diagnostics` |
+
+Plotter は topic と message schema を見て表示候補を作る。parse config と plot layout はファイルとして独立しているため、同じ parse config を複数 layout で使い回せる。また、同じ layout に対して parse config を差し替える場合は、signal id の一致を優先し、不一致は missing series として明示する。
+
+### 保存形式と互換性
+
+parse config と plot layout は JSON で始める。両方に `version`、`created_by`、`updated_at`、`description` を持たせる。互換性を守るため、破壊的変更時は schema version を上げ、旧 version の migration を CLI で実行できるようにする。
+
+capture file には parse config や plot layout を混ぜない。ただし将来 MCAP / Parquet などの container format を追加する場合は、metadata として参照名や checksum を入れることは許可する。CSV は引き続き raw frame の安定した交換形式として扱う。
+
+### 実装順序
+
+1. `SignalDefinition` / `ParseConfig` / `SignalSample` の core 型を追加する。
+2. 固定 capture CSV + parse config から signal sample を生成する offline parser を作る。
+3. parser golden test を追加し、endian、signed、scale、offset、length mismatch を確認する。
+4. Plotter の前に、CLI で `parse capture.csv --parse config.json --output signals.csv` を実装する。
+5. plot layout schema を定義し、layout JSON の golden test を追加する。
+6. 最小 Plotter GUI で offline signals CSV を読み、series 選択、scale / offset、layout 保存を実装する。
+7. live parser stream を server / client API に接続する。
+8. 統合起動または別ウィンドウ起動を追加する。
+
+この順序では、Parser と Plotter の仕様変更時に、変更範囲とテスト範囲を明確にできる。Parser 変更は fixed input / fixed output の golden test、Plotter 変更は layout schema と表示設定の保存/復元テストを中心に確認する。
 
 ## 受信専用 GUI 構成
 
