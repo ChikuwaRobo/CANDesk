@@ -8,6 +8,8 @@ pub mod capture;
 pub mod endpoint;
 pub mod error;
 pub mod model;
+pub mod parser;
+pub mod plot;
 pub mod protocol;
 pub mod server;
 

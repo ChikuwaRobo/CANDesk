@@ -129,6 +129,25 @@ input {
   gap: 8px;
 }
 
+.workspace-tabs {
+  display: inline-flex;
+  border: 1px solid #b8c3c7;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.workspace-tabs button {
+  min-width: 92px;
+  border: 0;
+  border-radius: 0;
+}
+
+.workspace-tabs button.active {
+  background: #17202a;
+  color: #ffffff;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
@@ -434,6 +453,208 @@ label {
   border-top: 1px solid #d9e1e3;
   background: #ffffff;
   overflow: auto;
+}
+
+.parser-workspace,
+.plotter-workspace {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-side-panel {
+  min-height: 0;
+  padding: 14px;
+  border-right: 1px solid #d9e1e3;
+  background: #eef3f4;
+  overflow: auto;
+}
+
+.workspace-main-panel {
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+  overflow: auto;
+}
+
+.config-summary {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #cad5d8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.config-summary span {
+  overflow: hidden;
+  color: #516169;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-summary strong {
+  font-size: 14px;
+}
+
+.stacked-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.signal-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.signal-list button {
+  display: grid;
+  justify-content: stretch;
+  gap: 3px;
+  min-height: 54px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.signal-list button.selected {
+  border-color: #196b7a;
+  background: #dcecf7;
+}
+
+.signal-list span,
+.signal-list strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-list span {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.signal-list strong {
+  color: #66747a;
+  font-size: 12px;
+}
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d9e1e3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.plot-editor-grid {
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+}
+
+.editor-checkbox {
+  align-self: end;
+  min-height: 32px;
+  margin-top: 0;
+}
+
+.preview-table-wrap {
+  margin-top: 14px;
+  overflow: auto;
+  border: 1px solid #d9e1e3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.preview-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+.preview-table th,
+.preview-table td {
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid #e4ebed;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-table th {
+  background: #edf4f5;
+  color: #435057;
+  font-size: 12px;
+}
+
+.plot-preview {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #d9e1e3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.plot-preview-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.plot-preview-header span {
+  color: #66747a;
+  font-size: 12px;
+}
+
+.plot-preview svg {
+  display: block;
+  width: 100%;
+  height: 220px;
+  border-radius: 6px;
+  background: #f4f7f8;
+}
+
+.plot-preview line {
+  stroke: #9ca9ae;
+  stroke-width: 1;
+}
+
+.plot-preview polyline {
+  fill: none;
+  stroke-width: 3;
+}
+
+.plot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.plot-legend button {
+  padding: 0 10px;
+}
+
+.plot-legend button.selected {
+  border-color: #196b7a;
+  background: #dcecf7;
+}
+
+.plot-legend span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }
 
 .detail-grid {

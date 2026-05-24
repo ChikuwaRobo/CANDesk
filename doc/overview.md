@@ -467,13 +467,24 @@ capture file には parse config や plot layout を混ぜない。ただし将�
 1. `SignalDefinition` / `ParseConfig` / `SignalSample` の core 型を追加する。
 2. 固定 capture CSV + parse config から signal sample を生成する offline parser を作る。
 3. parser golden test を追加し、endian、signed、scale、offset、length mismatch を確認する。
-4. Plotter の前に、CLI で `parse capture.csv --parse config.json --output signals.csv` を実装する。
+4. Plotter の前に、CLI で `canrush parse --input capture.csv --config config.json --output signals.csv` を実装する。
 5. plot layout schema を定義し、layout JSON の golden test を追加する。
-6. 最小 Plotter GUI で offline signals CSV を読み、series 選択、scale / offset、layout 保存を実装する。
-7. live parser stream を server / client API に接続する。
-8. 統合起動または別ウィンドウ起動を追加する。
+6. CLI で `canrush plot --input signals.csv --layout layout.json --output plot.csv` を実装し、layout 適用後の plot point 生成を検証する。
+7. 最小 Plotter GUI で offline signals CSV を読み、series 選択、scale / offset、layout 保存を実装する。
+8. live parser stream を server / client API に接続する。
+9. 統合起動または別ウィンドウ起動を追加する。
 
 この順序では、Parser と Plotter の仕様変更時に、変更範囲とテスト範囲を明確にできる。Parser 変更は fixed input / fixed output の golden test、Plotter 変更は layout schema と表示設定の保存/復元テストを中心に確認する。
+
+### Parser / Plotter 基本実装
+
+Parser / Plotter の基本機能として、まず CLI だけで完結する最小スライスを実装した。`canrush init-parse --output ...` は `.canrush-parse.json` のテンプレートを出力し、`canrush parse --input capture.csv --config parse.json --output signals.csv` は capture CSV と parse config から `SignalSample` CSV を生成する。
+
+Plotter 側は `canrush init-layout --output ...` で `.canrush-layout.json` のテンプレートを出力し、`canrush plot --input signals.csv --layout layout.json --output plot.csv` で plot 用 CSV を生成する。plot layout では series ごとの signal 選択、表示名、色、軸、表示用 scale / offset / unit override を保持する。物理値変換は parse config、表示上の補正は plot layout に分け、責務を混ぜない。
+
+現段階の Plotter は GUI 表示エンジンではなく、layout を適用した plot point 生成までを core/CLI で検証する段階である。これにより GUI 実装前に parse config、plot layout、CSV 契約、endian / signed / scale / offset の扱いを unit test と CLI smoke test で固定できる。
+
+GUI 側には `Monitor`、`Parser`、`Plotter` の workspace tab を追加した。`Parser` tab は parse config の選択、signal 一覧、signal editor、SignalSample preview の骨組みを持つ。`Plotter` tab は plot layout の選択、series 一覧、series editor、plot preview、legend の骨組みを持つ。現段階では sample data を表示するだけで、ファイル読み込み、保存、live parser stream、実プロット描画エンジンへの接続は後続実装とする。
 
 ## 受信専用 GUI 構成
 

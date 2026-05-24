@@ -7,9 +7,12 @@ import {
   CirclePause,
   Database,
   Download,
+  FileJson,
+  LineChart,
   Plug,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Square,
   Unplug,
 } from "lucide-react";
@@ -114,6 +117,33 @@ type SnapshotDto = {
 };
 
 type SortMode = "id" | "bus" | "recent";
+type WorkspaceView = "monitor" | "parser" | "plotter";
+
+type ParserSignal = {
+  id: string;
+  name: string;
+  bus: string;
+  canId: string;
+  byteOffset: number;
+  bitOffset: number;
+  bitLength: number;
+  endian: "little" | "big";
+  signed: boolean;
+  scale: number;
+  offset: number;
+  unit: string;
+};
+
+type PlotSeries = {
+  id: string;
+  signalId: string;
+  label: string;
+  axis: "left" | "right";
+  scale: number;
+  offset: number;
+  unit: string;
+  color: string;
+};
 
 const dummyIds = [0x103, 0x110, 0x180, 0x201, 0x2a0, 0x305, 0x3f2, 0x420];
 const initialServerInfo: ServerInfoDto = {
@@ -200,6 +230,60 @@ const sampleFrames: LatestFrame[] = [
     rateHz: "-",
     count: 0,
     raw: "",
+  },
+];
+
+const sampleParserSignals: ParserSignal[] = [
+  {
+    id: "can0_100_u16",
+    name: "example_value",
+    bus: "CAN0",
+    canId: "0x100",
+    byteOffset: 0,
+    bitOffset: 0,
+    bitLength: 16,
+    endian: "little",
+    signed: false,
+    scale: 1,
+    offset: 0,
+    unit: "raw",
+  },
+  {
+    id: "can1_110_temp",
+    name: "module_temp",
+    bus: "CAN1",
+    canId: "0x110",
+    byteOffset: 2,
+    bitOffset: 0,
+    bitLength: 12,
+    endian: "little",
+    signed: true,
+    scale: 0.1,
+    offset: -40,
+    unit: "degC",
+  },
+];
+
+const samplePlotSeries: PlotSeries[] = [
+  {
+    id: "example_value",
+    signalId: "can0_100_u16",
+    label: "Example value",
+    axis: "left",
+    scale: 1,
+    offset: 0,
+    unit: "raw",
+    color: "#196B7A",
+  },
+  {
+    id: "module_temp",
+    signalId: "can1_110_temp",
+    label: "Module temp",
+    axis: "right",
+    scale: 1,
+    offset: 0,
+    unit: "degC",
+    color: "#9A5A1F",
   },
 ];
 
@@ -329,6 +413,20 @@ function rateBarWidthPercent(rateHz: string, maxRateHz: number) {
   return Math.min(100, Math.max(0, (value / maxRateHz) * 100));
 }
 
+function sampleSignalValue(signal: ParserSignal, index: number) {
+  const raw = 13073 + index * 257;
+  return raw * signal.scale + signal.offset;
+}
+
+function makePlotPolyline(index: number) {
+  return Array.from({ length: 16 }, (_, pointIndex) => {
+    const x = 20 + pointIndex * 34;
+    const wave = Math.sin((pointIndex + index * 2) / 2.6);
+    const y = 108 - wave * (24 + index * 10) - pointIndex * (index === 0 ? 1.2 : -0.4);
+    return `${x},${Math.max(18, Math.min(142, y))}`;
+  }).join(" ");
+}
+
 function makeDummyFrame(bus: "CAN0" | "CAN1", id: number, index: number, tick: number): LatestFrame {
   const idText = formatCanId(`0x${id.toString(16)}`, "standard");
   const bytes = Array.from({ length: 8 }, (_, byteIndex) =>
@@ -364,6 +462,7 @@ function makeDummyFrames(tick: number) {
 }
 
 function App() {
+  const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
   const [frames, setFrames] = React.useState(sampleFrames);
@@ -377,6 +476,10 @@ function App() {
   const [connected, setConnected] = React.useState(false);
   const [serverInfo, setServerInfo] = React.useState(initialServerInfo);
   const [eventLog, setEventLog] = React.useState("server client ready");
+  const [parserSignals] = React.useState(sampleParserSignals);
+  const [selectedSignalId, setSelectedSignalId] = React.useState(sampleParserSignals[0].id);
+  const [plotSeries] = React.useState(samplePlotSeries);
+  const [selectedSeriesId, setSelectedSeriesId] = React.useState(samplePlotSeries[0].id);
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
 
@@ -394,6 +497,10 @@ function App() {
 
   const selectedFrame =
     visibleFrames.find((frame) => frame.rowKey === selectedFrameId) ?? visibleFrames[0];
+  const selectedSignal =
+    parserSignals.find((signal) => signal.id === selectedSignalId) ?? parserSignals[0];
+  const selectedSeries =
+    plotSeries.find((series) => series.id === selectedSeriesId) ?? plotSeries[0];
 
   React.useEffect(() => {
     if (visibleFrames.length === 0) {
@@ -610,6 +717,23 @@ function App() {
           </div>
         </div>
         <div className="toolbar" aria-label="main actions">
+          <div className="workspace-tabs" role="tablist" aria-label="workspace view">
+            {([
+              ["monitor", "Monitor", Activity],
+              ["parser", "Parser", FileJson],
+              ["plotter", "Plotter", LineChart],
+            ] as const).map(([value, label, Icon]) => (
+              <button
+                type="button"
+                key={value}
+                className={workspaceView === value ? "active" : ""}
+                onClick={() => setWorkspaceView(value)}
+              >
+                <Icon size={16} />
+                {label}
+              </button>
+            ))}
+          </div>
           <button type="button" onClick={refreshPorts} title="ポート再読み込み">
             <RefreshCw size={16} />
             Refresh
@@ -629,6 +753,8 @@ function App() {
         </div>
       </header>
 
+      {workspaceView === "monitor" ? (
+        <>
       <section className="content-grid">
         <aside className="bus-panel" aria-label="bus settings">
           <div className="panel-heading">
@@ -888,6 +1014,248 @@ function App() {
           <p className="empty-detail">Select a frame</p>
         )}
       </section>
+        </>
+      ) : null}
+
+      {workspaceView === "parser" ? (
+        <section className="parser-workspace" aria-label="parser workspace">
+          <aside className="workspace-side-panel">
+            <div className="panel-heading">
+              <FileJson size={18} />
+              <h2>Parse Config</h2>
+            </div>
+            <div className="config-summary">
+              <span>example.canrush-parse.json</span>
+              <strong>{parserSignals.length} signals</strong>
+            </div>
+            <div className="stacked-actions">
+              <button type="button" title="後続実装でファイル選択に接続">
+                <FileJson size={16} />
+                Load
+              </button>
+              <button type="button" title="後続実装で保存に接続">
+                <Download size={16} />
+                Save
+              </button>
+            </div>
+            <div className="signal-list">
+              {parserSignals.map((signal) => (
+                <button
+                  type="button"
+                  key={signal.id}
+                  className={selectedSignalId === signal.id ? "selected" : ""}
+                  onClick={() => setSelectedSignalId(signal.id)}
+                >
+                  <span>{signal.name}</span>
+                  <strong>
+                    {signal.bus} {signal.canId}
+                  </strong>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="workspace-main-panel">
+            <div className="panel-heading">
+              <SlidersHorizontal size={18} />
+              <h2>Signal Editor</h2>
+            </div>
+            <div className="editor-grid">
+              <label>
+                Signal ID
+                <input value={selectedSignal.id} readOnly />
+              </label>
+              <label>
+                Name
+                <input value={selectedSignal.name} readOnly />
+              </label>
+              <label>
+                Bus
+                <select value={selectedSignal.bus} disabled>
+                  <option>{selectedSignal.bus}</option>
+                </select>
+              </label>
+              <label>
+                CAN ID
+                <input value={selectedSignal.canId} readOnly />
+              </label>
+              <label>
+                Byte
+                <input value={selectedSignal.byteOffset} readOnly />
+              </label>
+              <label>
+                Bit
+                <input value={selectedSignal.bitOffset} readOnly />
+              </label>
+              <label>
+                Length
+                <input value={selectedSignal.bitLength} readOnly />
+              </label>
+              <label>
+                Endian
+                <select value={selectedSignal.endian} disabled>
+                  <option value="little">little</option>
+                  <option value="big">big</option>
+                </select>
+              </label>
+              <label className="checkbox-line editor-checkbox">
+                <input type="checkbox" checked={selectedSignal.signed} readOnly />
+                Signed
+              </label>
+              <label>
+                Scale
+                <input value={selectedSignal.scale} readOnly />
+              </label>
+              <label>
+                Offset
+                <input value={selectedSignal.offset} readOnly />
+              </label>
+              <label>
+                Unit
+                <input value={selectedSignal.unit} readOnly />
+              </label>
+            </div>
+
+            <div className="preview-table-wrap">
+              <table className="preview-table">
+                <thead>
+                  <tr>
+                    <th>timestamp</th>
+                    <th>signal</th>
+                    <th>value</th>
+                    <th>unit</th>
+                    <th>quality</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parserSignals.map((signal, index) => (
+                    <tr key={signal.id}>
+                      <td>+{(index * 0.5).toFixed(3)}s</td>
+                      <td>{signal.id}</td>
+                      <td className="mono">{sampleSignalValue(signal, index).toFixed(3)}</td>
+                      <td>{signal.unit}</td>
+                      <td>ok</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      ) : null}
+
+      {workspaceView === "plotter" ? (
+        <section className="plotter-workspace" aria-label="plotter workspace">
+          <aside className="workspace-side-panel">
+            <div className="panel-heading">
+              <LineChart size={18} />
+              <h2>Plot Layout</h2>
+            </div>
+            <div className="config-summary">
+              <span>example.canrush-layout.json</span>
+              <strong>{plotSeries.length} series</strong>
+            </div>
+            <div className="stacked-actions">
+              <button type="button" title="後続実装でレイアウト読み込みに接続">
+                <FileJson size={16} />
+                Load
+              </button>
+              <button type="button" title="後続実装でレイアウト保存に接続">
+                <Download size={16} />
+                Save
+              </button>
+            </div>
+            <div className="signal-list">
+              {plotSeries.map((series) => (
+                <button
+                  type="button"
+                  key={series.id}
+                  className={selectedSeriesId === series.id ? "selected" : ""}
+                  onClick={() => setSelectedSeriesId(series.id)}
+                >
+                  <span>{series.label}</span>
+                  <strong>{series.signalId}</strong>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="workspace-main-panel">
+            <div className="panel-heading">
+              <SlidersHorizontal size={18} />
+              <h2>Series Editor</h2>
+            </div>
+            <div className="editor-grid plot-editor-grid">
+              <label>
+                Series ID
+                <input value={selectedSeries.id} readOnly />
+              </label>
+              <label>
+                Source signal
+                <input value={selectedSeries.signalId} readOnly />
+              </label>
+              <label>
+                Label
+                <input value={selectedSeries.label} readOnly />
+              </label>
+              <label>
+                Axis
+                <select value={selectedSeries.axis} disabled>
+                  <option value="left">left</option>
+                  <option value="right">right</option>
+                </select>
+              </label>
+              <label>
+                Scale
+                <input value={selectedSeries.scale} readOnly />
+              </label>
+              <label>
+                Offset
+                <input value={selectedSeries.offset} readOnly />
+              </label>
+              <label>
+                Unit override
+                <input value={selectedSeries.unit} readOnly />
+              </label>
+              <label>
+                Color
+                <input value={selectedSeries.color} readOnly />
+              </label>
+            </div>
+
+            <div className="plot-preview">
+              <div className="plot-preview-header">
+                <strong>Main</strong>
+                <span>offline signals CSV preview</span>
+              </div>
+              <svg viewBox="0 0 580 170" role="img" aria-label="plot preview">
+                <line x1="20" y1="150" x2="560" y2="150" />
+                <line x1="20" y1="18" x2="20" y2="150" />
+                {plotSeries.map((series, index) => (
+                  <polyline
+                    key={series.id}
+                    points={makePlotPolyline(index)}
+                    stroke={series.color}
+                  />
+                ))}
+              </svg>
+              <div className="plot-legend">
+                {plotSeries.map((series) => (
+                  <button
+                    type="button"
+                    key={series.id}
+                    className={selectedSeriesId === series.id ? "selected" : ""}
+                    onClick={() => setSelectedSeriesId(series.id)}
+                  >
+                    <span style={{ background: series.color }} />
+                    {series.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+        </section>
+      ) : null}
 
       <footer className="status-strip">
         <span>{eventLog}</span>

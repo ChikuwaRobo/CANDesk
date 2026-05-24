@@ -17,6 +17,10 @@ use canrush_core::capture::{
 };
 use canrush_core::endpoint::{parse_server_endpoint, ServerEndpoint};
 use canrush_core::error::{CanrushError, Result};
+use canrush_core::parser::{parse_capture_csv_file, write_signal_csv_file, ParseConfig};
+use canrush_core::plot::{
+    build_plot_points, read_signal_csv_file, write_plot_csv_file, PlotLayout,
+};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
@@ -34,7 +38,11 @@ struct Cli {
 enum Commands {
     Capture(Box<CaptureArgs>),
     Check(Box<CheckArgs>),
+    InitLayout(InitLayoutArgs),
+    InitParse(InitParseArgs),
     ListPorts,
+    Parse(ParseArgs),
+    Plot(PlotArgs),
     Server(Box<ServerArgs>),
     Stats(StatsArgs),
 }
@@ -216,6 +224,42 @@ struct StatsArgs {
     json: bool,
 }
 
+#[derive(Debug, Parser)]
+struct InitParseArgs {
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+struct InitLayoutArgs {
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+struct ParseArgs {
+    #[arg(long)]
+    input: PathBuf,
+
+    #[arg(long)]
+    config: PathBuf,
+
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+struct PlotArgs {
+    #[arg(long)]
+    input: PathBuf,
+
+    #[arg(long)]
+    layout: PathBuf,
+
+    #[arg(long)]
+    output: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum AdapterKind {
     Fake,
@@ -240,10 +284,55 @@ fn run() -> Result<()> {
             run_capture(*args)
         }
         Commands::Check(args) => run_check(*args),
+        Commands::InitLayout(args) => run_init_layout(args),
+        Commands::InitParse(args) => run_init_parse(args),
         Commands::ListPorts => run_list_ports(),
+        Commands::Parse(args) => run_parse(args),
+        Commands::Plot(args) => run_plot(args),
         Commands::Server(args) => run_server_command(*args, cli.server.as_deref()),
         Commands::Stats(args) => run_stats(args, cli.server.as_deref()),
     }
+}
+
+fn run_init_parse(args: InitParseArgs) -> Result<()> {
+    let config = ParseConfig::example();
+    write_json_file(&args.output, &config)?;
+    println!("wrote parse config template to {}", args.output.display());
+    Ok(())
+}
+
+fn run_init_layout(args: InitLayoutArgs) -> Result<()> {
+    let layout = PlotLayout::example();
+    write_json_file(&args.output, &layout)?;
+    println!("wrote plot layout template to {}", args.output.display());
+    Ok(())
+}
+
+fn run_parse(args: ParseArgs) -> Result<()> {
+    let config = read_json_file::<ParseConfig>(&args.config)?;
+    config.validate()?;
+    let samples = parse_capture_csv_file(&args.input, &config)?;
+    write_signal_csv_file(&args.output, &samples)?;
+    println!(
+        "parsed {} signal sample(s) to {}",
+        samples.len(),
+        args.output.display()
+    );
+    Ok(())
+}
+
+fn run_plot(args: PlotArgs) -> Result<()> {
+    let layout = read_json_file::<PlotLayout>(&args.layout)?;
+    layout.validate()?;
+    let samples = read_signal_csv_file(&args.input)?;
+    let points = build_plot_points(&layout, &samples);
+    write_plot_csv_file(&args.output, &points)?;
+    println!(
+        "built {} plot point(s) to {}",
+        points.len(),
+        args.output.display()
+    );
+    Ok(())
 }
 
 fn run_capture(args: CaptureArgs) -> Result<()> {
@@ -770,6 +859,18 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
         .map_err(|error| CanrushError::InvalidArgument(format!("JSON encode failed: {error}")))?;
     println!("{json}");
     Ok(())
+}
+
+fn read_json_file<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T> {
+    let file = File::open(path)?;
+    serde_json::from_reader(file)
+        .map_err(|error| CanrushError::InvalidArgument(format!("JSON decode failed: {error}")))
+}
+
+fn write_json_file<T: serde::Serialize>(path: &PathBuf, value: &T) -> Result<()> {
+    let file = File::create(path)?;
+    serde_json::to_writer_pretty(file, value)
+        .map_err(|error| CanrushError::InvalidArgument(format!("JSON encode failed: {error}")))
 }
 
 fn adapter_name(adapter: AdapterKind) -> &'static str {
