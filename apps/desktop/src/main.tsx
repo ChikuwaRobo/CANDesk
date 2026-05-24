@@ -12,6 +12,7 @@ import {
   Plug,
   RefreshCw,
   Search,
+  Server,
   SlidersHorizontal,
   Square,
   Unplug,
@@ -106,6 +107,9 @@ type ServerInfoDto = {
   protocol_version: string;
   started_at_unix_ms: string;
   read_only: boolean;
+  process_state: string;
+  owner: string;
+  exit_reason: string;
   message: string;
 };
 
@@ -153,6 +157,9 @@ const initialServerInfo: ServerInfoDto = {
   protocol_version: "-",
   started_at_unix_ms: "-",
   read_only: false,
+  process_state: "not-running",
+  owner: "external",
+  exit_reason: "",
   message: "not checked",
 };
 
@@ -533,6 +540,36 @@ function App() {
     }
   }
 
+  async function startServer() {
+    if (!hasTauriRuntime()) {
+      setServerInfo({
+        ...initialServerInfo,
+        connected: true,
+        server_name: "canrush-server-preview",
+        protocol_version: "preview",
+        process_state: "running",
+        owner: "browser-preview",
+        message: "browser preview mode; server start is simulated",
+      });
+      setEventLog("browser preview mode; server start is simulated");
+      return;
+    }
+
+    try {
+      const info = await invoke<ServerInfoDto>("start_local_server");
+      setServerInfo(info);
+      setEventLog(info.message);
+    } catch (error) {
+      setServerInfo((current) => ({
+        ...current,
+        connected: false,
+        process_state: current.process_state === "running" ? "unknown" : current.process_state,
+        message: String(error),
+      }));
+      setEventLog(`server start failed: ${String(error)}`);
+    }
+  }
+
   async function connectAll() {
     if (!hasTauriRuntime()) {
       setConnected(true);
@@ -710,13 +747,16 @@ function App() {
           <div className="server-summary" aria-label="local server status">
             <span className={`server-dot ${serverInfo.connected ? "online" : "offline"}`} />
             <span>{serverInfo.endpoint}</span>
-            <span>{serverInfo.server_name}</span>
-            <span>{serverInfo.protocol_version}</span>
-            <span>{serverInfo.read_only ? "read-only" : "admin"}</span>
-            <span>started {formatServerStartedAt(serverInfo.started_at_unix_ms)}</span>
-          </div>
+          <span>{serverInfo.server_name}</span>
+          <span>{serverInfo.protocol_version}</span>
+          <span>{serverInfo.owner}</span>
+          <span>{serverInfo.process_state}</span>
+          <span>{serverInfo.read_only ? "read-only" : "admin"}</span>
+          <span>started {formatServerStartedAt(serverInfo.started_at_unix_ms)}</span>
+          {serverInfo.exit_reason ? <span>{serverInfo.exit_reason}</span> : null}
         </div>
-        <div className="toolbar" aria-label="main actions">
+      </div>
+      <div className="toolbar" aria-label="main actions">
           <div className="workspace-tabs" role="tablist" aria-label="workspace view">
             {([
               ["monitor", "Monitor", Activity],
@@ -734,6 +774,10 @@ function App() {
               </button>
             ))}
           </div>
+          <button type="button" onClick={startServer} title="ローカルサーバー起動">
+            <Server size={16} />
+            Start Server
+          </button>
           <button type="button" onClick={refreshPorts} title="ポート再読み込み">
             <RefreshCw size={16} />
             Refresh

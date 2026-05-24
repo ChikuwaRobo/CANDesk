@@ -1,10 +1,15 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use canrush_core::api::{
     BusStatusDto as ServerBusStatusDto, ConnectBusRequest, FrameEventDto, ServerStatusDto,
@@ -20,6 +25,10 @@ const SERVER_ENDPOINT: &str = "local";
 const SERVER_SESSION: &str = "default";
 const GUI_RATE_WINDOW_BUCKETS: u64 = 2;
 const SERVER_INFO_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
+const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Serialize)]
 struct SerialPortDto {
@@ -44,6 +53,9 @@ struct ServerInfoDto {
     protocol_version: String,
     started_at_unix_ms: String,
     read_only: bool,
+    process_state: String,
+    owner: String,
+    exit_reason: String,
     message: String,
 }
 
@@ -101,6 +113,7 @@ impl Drop for StreamRuntime {
 struct ReceiverInner {
     latest: LatestFrameState,
     stream: Option<StreamRuntime>,
+    server_process: Option<ServerProcessRuntime>,
     server_info: Option<ServerInfoDto>,
     server_info_checked_at: Option<Instant>,
     event_log: String,
@@ -109,6 +122,21 @@ struct ReceiverInner {
 #[derive(Default)]
 struct ReceiverState {
     inner: Arc<Mutex<ReceiverInner>>,
+}
+
+struct ServerProcessRuntime {
+    child: Child,
+    started_at: Instant,
+    exit_reason: Option<String>,
+}
+
+impl Drop for ServerProcessRuntime {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 #[tauri::command]
@@ -188,6 +216,76 @@ fn clear_latest(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
     inner.latest = LatestFrameState::default();
     inner.event_log = "latest frame view cleared".to_string();
     Ok(())
+}
+
+#[tauri::command]
+fn start_local_server(state: tauri::State<'_, ReceiverState>) -> Result<ServerInfoDto, String> {
+    if let Ok(status) = get_json::<ServerStatusDto>("/api/v1/status") {
+        let info = server_info_from_status(status, "external", "running", "", "existing server");
+        update_server_info(&state.inner, info.clone())?;
+        set_event_log(&state.inner, "using existing local server".to_string())?;
+        return Ok(info);
+    }
+
+    let executable = find_server_executable()?;
+    let mut command = Command::new(&executable);
+    command
+        .arg("--listen")
+        .arg("127.0.0.1:49000")
+        .arg("--server-name")
+        .arg("canrush-server-gui")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn {}: {error}", executable.display()))?;
+    {
+        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+        inner.server_process = Some(ServerProcessRuntime {
+            child,
+            started_at: Instant::now(),
+            exit_reason: None,
+        });
+        inner.server_info = None;
+        inner.server_info_checked_at = None;
+        inner.event_log = "local server process started".to_string();
+    }
+
+    let deadline = Instant::now() + SERVER_STARTUP_TIMEOUT;
+    loop {
+        match get_json::<ServerStatusDto>("/api/v1/status") {
+            Ok(status) => {
+                let info = server_info_from_status(status, "gui", "running", "", "server started");
+                update_server_info(&state.inner, info.clone())?;
+                return Ok(info);
+            }
+            Err(status_error) => {
+                if let Some(exit_reason) = poll_server_process(&state.inner)? {
+                    let info = disconnected_server_info(
+                        "gui",
+                        "exited",
+                        &exit_reason,
+                        &format!("server startup failed: {exit_reason}"),
+                    );
+                    update_server_info(&state.inner, info.clone())?;
+                    return Err(info.message);
+                }
+                if Instant::now() >= deadline {
+                    let message = format!("server startup timeout: {status_error}");
+                    let info = disconnected_server_info("gui", "starting", "", &message);
+                    update_server_info(&state.inner, info.clone())?;
+                    return Err(message);
+                }
+                thread::sleep(SERVER_POLL_INTERVAL);
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -412,6 +510,18 @@ fn fetch_server_buses() -> Result<Vec<ServerBusStatusDto>, String> {
 }
 
 fn refresh_server_info(shared: &Arc<Mutex<ReceiverInner>>) -> Result<ServerInfoDto, String> {
+    let owner = current_server_owner(shared)?;
+    if let Some(exit_reason) = poll_server_process(shared)? {
+        let info = disconnected_server_info(
+            &owner,
+            "exited",
+            &exit_reason,
+            &format!("server process stopped: {exit_reason}"),
+        );
+        update_server_info(shared, info.clone())?;
+        return Ok(info);
+    }
+
     {
         let inner = shared.lock().map_err(|error| error.to_string())?;
         if let (Some(info), Some(checked_at)) = (&inner.server_info, inner.server_info_checked_at) {
@@ -424,29 +534,12 @@ fn refresh_server_info(shared: &Arc<Mutex<ReceiverInner>>) -> Result<ServerInfoD
     let endpoint = server_endpoint()?;
     let endpoint_text = endpoint.to_string();
     let info = match get_json::<ServerStatusDto>("/api/v1/status") {
-        Ok(status) => ServerInfoDto {
-            endpoint: endpoint_text,
-            connected: true,
-            server_name: status.server_name,
-            protocol_version: status.protocol_version,
-            started_at_unix_ms: status.started_at_unix_ms,
-            read_only: status.read_only,
-            message: "connected".to_string(),
-        },
-        Err(error) => ServerInfoDto {
-            endpoint: endpoint_text,
-            connected: false,
-            server_name: "-".to_string(),
-            protocol_version: "-".to_string(),
-            started_at_unix_ms: "-".to_string(),
-            read_only: false,
-            message: error,
-        },
+        Ok(status) => server_info_from_status(status, &owner, "running", "", "connected"),
+        Err(error) => disconnected_server_info(&owner, "not-running", "", &error),
     };
+    debug_assert_eq!(info.endpoint, endpoint_text);
 
-    let mut inner = shared.lock().map_err(|error| error.to_string())?;
-    inner.server_info = Some(info.clone());
-    inner.server_info_checked_at = Some(Instant::now());
+    update_server_info(shared, info.clone())?;
     Ok(info)
 }
 
@@ -462,6 +555,130 @@ fn map_bus_status(status: ServerBusStatusDto) -> BusStatusDto {
         saturated_worst_1s_ms: "-".to_string(),
         message: status.message,
     }
+}
+
+fn server_info_from_status(
+    status: ServerStatusDto,
+    owner: &str,
+    process_state: &str,
+    exit_reason: &str,
+    message: &str,
+) -> ServerInfoDto {
+    ServerInfoDto {
+        endpoint: SERVER_ENDPOINT.to_string(),
+        connected: true,
+        server_name: status.server_name,
+        protocol_version: status.protocol_version,
+        started_at_unix_ms: status.started_at_unix_ms,
+        read_only: status.read_only,
+        process_state: process_state.to_string(),
+        owner: owner.to_string(),
+        exit_reason: exit_reason.to_string(),
+        message: message.to_string(),
+    }
+}
+
+fn disconnected_server_info(
+    owner: &str,
+    process_state: &str,
+    exit_reason: &str,
+    message: &str,
+) -> ServerInfoDto {
+    ServerInfoDto {
+        endpoint: SERVER_ENDPOINT.to_string(),
+        connected: false,
+        server_name: "-".to_string(),
+        protocol_version: "-".to_string(),
+        started_at_unix_ms: "-".to_string(),
+        read_only: false,
+        process_state: process_state.to_string(),
+        owner: owner.to_string(),
+        exit_reason: exit_reason.to_string(),
+        message: message.to_string(),
+    }
+}
+
+fn update_server_info(
+    shared: &Arc<Mutex<ReceiverInner>>,
+    info: ServerInfoDto,
+) -> Result<(), String> {
+    let mut inner = shared.lock().map_err(|error| error.to_string())?;
+    inner.server_info = Some(info);
+    inner.server_info_checked_at = Some(Instant::now());
+    Ok(())
+}
+
+fn current_server_owner(shared: &Arc<Mutex<ReceiverInner>>) -> Result<String, String> {
+    let inner = shared.lock().map_err(|error| error.to_string())?;
+    Ok(if inner.server_process.is_some() {
+        "gui".to_string()
+    } else {
+        "external".to_string()
+    })
+}
+
+fn poll_server_process(shared: &Arc<Mutex<ReceiverInner>>) -> Result<Option<String>, String> {
+    let mut inner = shared.lock().map_err(|error| error.to_string())?;
+    let Some(runtime) = inner.server_process.as_mut() else {
+        return Ok(None);
+    };
+    if let Some(exit_reason) = &runtime.exit_reason {
+        return Ok(Some(exit_reason.clone()));
+    }
+    match runtime
+        .child
+        .try_wait()
+        .map_err(|error| error.to_string())?
+    {
+        Some(status) => {
+            let elapsed_ms = runtime.started_at.elapsed().as_millis();
+            let reason = match status.code() {
+                Some(code) => format!("exit-code={code}; elapsed_ms={elapsed_ms}"),
+                None => format!("terminated-by-signal; elapsed_ms={elapsed_ms}"),
+            };
+            runtime.exit_reason = Some(reason.clone());
+            Ok(Some(reason))
+        }
+        None => Ok(None),
+    }
+}
+
+fn find_server_executable() -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("CANRUSH_SERVER_PATH") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        return Err(format!(
+            "CANRUSH_SERVER_PATH does not exist: {}",
+            candidate.display()
+        ));
+    }
+
+    let executable_name = if cfg!(windows) {
+        "canrush-server.exe"
+    } else {
+        "canrush-server"
+    };
+    let mut candidates = Vec::new();
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(dir) = current.parent() {
+            candidates.push(dir.join(executable_name));
+        }
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../../target/debug/{executable_name}")),
+    );
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../../target/release/{executable_name}")),
+    );
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| format!("canrush-server executable not found: {executable_name}"))
 }
 
 fn server_endpoint() -> Result<ServerEndpoint, String> {
@@ -558,6 +775,7 @@ fn main() {
             disconnect_bus,
             disconnect_all,
             clear_latest,
+            start_local_server,
             latest_snapshot,
         ])
         .run(tauri::generate_context!())

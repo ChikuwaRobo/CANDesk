@@ -486,6 +486,10 @@ Plotter 側は `canrush init-layout --output ...` で `.canrush-layout.json` の
 
 GUI 側には `Monitor`、`Parser`、`Plotter` の workspace tab を追加した。`Parser` tab は parse config の選択、signal 一覧、signal editor、SignalSample preview の骨組みを持つ。`Plotter` tab は plot layout の選択、series 一覧、series editor、plot preview、legend の骨組みを持つ。現段階では sample data を表示するだけで、ファイル読み込み、保存、live parser stream、実プロット描画エンジンへの接続は後続実装とする。
 
+GUI は server 分離後の運用として、まず既存の local server を優先して使う。`Start Server` 操作時に `/api/v1/status` が応答すれば GUI は server を起動せず、owner を `external` として既存 server に接続する。応答がない場合だけ GUI backend が `canrush-server --listen 127.0.0.1:49000 --server-name canrush-server-gui` を子プロセスとして起動する。
+
+GUI backend は起動した server process の状態を保持し、`running`、`starting`、`not-running`、`exited` のような process state と、`external` / `gui` の owner を GUI に返す。起動直後は status API を polling し、server process が先に終了した場合は exit code と起動後経過時間を exit reason として返す。起動後に GUI 管理 server が停止した場合も `latest_snapshot` の status refresh で検出し、`server process stopped` として表示する。
+
 ## 受信専用 GUI 構成
 
 当面の GUI は受信専用に限定する。送信、定期送信、送信プリセット編集、DBC 読み込み、プロットは初期 GUI から外す。最初の目的は、2 台の WeActStudio USB2CANFDV1 を 1 Mbps で接続し、`CAN0` と `CAN1` の受信状態を同一画面で安定して観測できることである。
