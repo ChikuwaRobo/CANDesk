@@ -554,9 +554,14 @@ label {
 
 .stacked-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
+}
+
+.wide-action {
+  width: 100%;
+  margin-top: 8px;
 }
 
 .signal-list {
@@ -670,22 +675,12 @@ label {
   font-size: 12px;
 }
 
-.plot-preview svg {
+.plot-preview canvas {
   display: block;
   width: 100%;
   height: 220px;
   border-radius: 6px;
   background: #f4f7f8;
-}
-
-.plot-preview line {
-  stroke: #9ca9ae;
-  stroke-width: 1;
-}
-
-.plot-preview polyline {
-  fill: none;
-  stroke-width: 3;
 }
 
 .plot-legend {

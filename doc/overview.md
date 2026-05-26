@@ -1075,3 +1075,11 @@ Plotter画面は、読み込んだレイアウト名、系列数、パネル数�
 Parser/Plotter ワークスペースでは、パース設定 JSON とプロットレイアウト JSON のパスを入力して読み込む。現時点ではファイル選択ダイアログではなくパス入力とし、既定値は `examples/orion.canrush-parse.json` と `examples/orion.canrush-layout.json` にしている。
 
 GUI の `Parse` / `Plot` 操作は、Tauri backend が保持している最新受信フレームを `canrush-core::parser::parse_frames()` と `canrush-core::plot::build_plot_points()` に渡す。これにより CLI の `parse` / `plot` と GUI のプレビューで、同じ設定ファイルと同じ core 実装を使う。GUI 表示用のサンプル波形は、実データがない場合の見た目確認用に限定する。
+
+`CSV Plot` 操作は capture CSV、パース設定 JSON、プロットレイアウト JSON を読み込み、`parse_capture_csv_file()` と `build_plot_points()` で結果を生成する。既定値は Orion サンプル一式で、実機受信がない状態でも「設定読み込み -> パース設定反映 -> パース済みデータのプロット表示」をGUIだけで確認できる。
+
+Plotter の `Live` は、GUI backend が保持している最新受信フレームを 100ms 周期でパースし、プロット点を追記する。設定JSONは Live 中に毎回読み直さず、`Load` 時に Tauri backend へキャッシュする。描画は SVG ではなく Canvas にし、`requestAnimationFrame` を 30fps 相当に間引いて描画する。系列あたりの描画点数も上限を設け、React の表表示は末尾200行だけに制限する。
+
+リアルタイムプロット履歴はフロントエンド側で最大 10000 sample / 20000 point に制限する。現段階では server stream 全量ではなく GUI の latest frame state を入力にするため、表示用リアルタイムプロットとして扱い、欠落を許容しない記録用途には CLI capture / capture CSV を使う。
+
+プロット描画対象は常に最新時刻から過去10秒間に限定する。内部履歴は少し長めに保持するが、Canvas描画、選択系列のpoint数、plot point表はこの10秒窓に入るデータだけを対象にする。

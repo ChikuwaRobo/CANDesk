@@ -235,6 +235,13 @@ type ParsePlotPreviewDto = {
 };
 
 const dummyIds = [0x103, 0x110, 0x180, 0x201, 0x2a0, 0x305, 0x3f2, 0x420];
+const realtimePreviewIntervalMs = 100;
+const plotRenderFrameMs = 1000 / 30;
+const plotVisibleWindowSeconds = 10;
+const maxRealtimeSamples = 10000;
+const maxRealtimePlotPoints = 20000;
+const maxCanvasPointsPerSeries = 1600;
+const maxPreviewTableRows = 200;
 const initialServerInfo: ServerInfoDto = {
   endpoint: "127.0.0.1:49000",
   connected: false,
@@ -552,35 +559,189 @@ function mapPlotLayout(layout: PlotLayoutDto): PlotSeries[] {
   );
 }
 
-function makePlotPolyline(index: number) {
-  return Array.from({ length: 16 }, (_, pointIndex) => {
-    const x = 20 + pointIndex * 34;
-    const wave = Math.sin((pointIndex + index * 2) / 2.6);
-    const y = 108 - wave * (24 + index * 10) - pointIndex * (index === 0 ? 1.2 : -0.4);
-    return `${x},${Math.max(18, Math.min(142, y))}`;
-  }).join(" ");
+function signalSampleKey(sample: SignalSampleDto) {
+  return `${sample.signal_id}-${sample.source_sequence}-${sample.timestamp_host}`;
 }
 
-function makePlotPolylineFromPoints(points: PlotPointDto[]) {
-  if (points.length === 0) {
-    return "";
+function plotPointKey(point: PlotPointDto) {
+  return `${point.panel_id}-${point.series_id}-${point.source_sequence}-${point.timestamp_host}`;
+}
+
+function resetSeenSampleKeys(samples: SignalSampleDto[], seen: Set<string>) {
+  seen.clear();
+  for (const sample of samples) {
+    seen.add(signalSampleKey(sample));
   }
-  const timestamps = points.map((point) => Number.parseFloat(point.timestamp_host));
-  const values = points.map((point) => point.value).filter(Number.isFinite);
-  const minTime = Math.min(...timestamps);
-  const maxTime = Math.max(...timestamps);
-  const minValue = Math.min(...values);
-  const maxValue = Math.max(...values);
+}
+
+function resetSeenPlotPointKeys(points: PlotPointDto[], seen: Set<string>) {
+  seen.clear();
+  for (const point of points) {
+    seen.add(plotPointKey(point));
+  }
+}
+
+function appendUniqueSamples(
+  current: SignalSampleDto[],
+  incoming: SignalSampleDto[],
+  seen: Set<string>,
+) {
+  const unique = incoming.filter((sample) => {
+    const key = signalSampleKey(sample);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  if (unique.length === 0) {
+    return current;
+  }
+  const next = [...current, ...unique].slice(-maxRealtimeSamples);
+  resetSeenSampleKeys(next, seen);
+  return next;
+}
+
+function appendUniquePlotPoints(
+  current: PlotPointDto[],
+  incoming: PlotPointDto[],
+  seen: Set<string>,
+) {
+  const unique = incoming.filter((point) => {
+    const key = plotPointKey(point);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  if (unique.length === 0) {
+    return current;
+  }
+  const next = [...current, ...unique].slice(-maxRealtimePlotPoints);
+  resetSeenPlotPointKeys(next, seen);
+  return next;
+}
+
+function filterRecentPlotPoints(points: PlotPointDto[], windowSeconds: number) {
+  if (points.length === 0) {
+    return points;
+  }
+  const latestTimestamp = Math.max(
+    ...points
+      .map((point) => Number.parseFloat(point.timestamp_host))
+      .filter(Number.isFinite),
+  );
+  if (!Number.isFinite(latestTimestamp)) {
+    return points;
+  }
+  const cutoff = latestTimestamp - windowSeconds;
+  return points.filter((point) => {
+    const timestamp = Number.parseFloat(point.timestamp_host);
+    return Number.isFinite(timestamp) && timestamp >= cutoff;
+  });
+}
+
+function drawPlotCanvas(
+  canvas: HTMLCanvasElement,
+  seriesList: PlotSeries[],
+  points: PlotPointDto[],
+) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.floor(rect.width));
+  const height = Math.max(1, Math.floor(rect.height));
+  const pixelWidth = Math.floor(width * dpr);
+  const pixelHeight = Math.floor(height * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#f4f7f8";
+  context.fillRect(0, 0, width, height);
+
+  const left = 34;
+  const right = 12;
+  const top = 14;
+  const bottom = 24;
+  const chartWidth = Math.max(1, width - left - right);
+  const chartHeight = Math.max(1, height - top - bottom);
+
+  context.strokeStyle = "#d4dee1";
+  context.lineWidth = 1;
+  context.beginPath();
+  for (let index = 0; index <= 4; index += 1) {
+    const y = top + (chartHeight * index) / 4;
+    context.moveTo(left, y);
+    context.lineTo(left + chartWidth, y);
+  }
+  context.stroke();
+
+  context.strokeStyle = "#9ca9ae";
+  context.beginPath();
+  context.moveTo(left, top);
+  context.lineTo(left, top + chartHeight);
+  context.lineTo(left + chartWidth, top + chartHeight);
+  context.stroke();
+
+  const visiblePoints = filterRecentPlotPoints(points, plotVisibleWindowSeconds);
+  const pointsBySeries = new Map<string, PlotPointDto[]>();
+  for (const point of visiblePoints) {
+    const timestamp = Number.parseFloat(point.timestamp_host);
+    if (!Number.isFinite(timestamp) || !Number.isFinite(point.value)) {
+      continue;
+    }
+    const seriesPoints = pointsBySeries.get(point.series_id) ?? [];
+    seriesPoints.push(point);
+    pointsBySeries.set(point.series_id, seriesPoints);
+  }
+  const drawablePoints = Array.from(pointsBySeries.values()).flat();
+  if (drawablePoints.length === 0) {
+    return;
+  }
+
+  const maxTime = Math.max(
+    ...drawablePoints.map((point) => Number.parseFloat(point.timestamp_host)),
+  );
+  const minTime = maxTime - plotVisibleWindowSeconds;
+  const minValue = Math.min(...drawablePoints.map((point) => point.value));
+  const maxValue = Math.max(...drawablePoints.map((point) => point.value));
   const timeRange = Math.max(0.001, maxTime - minTime);
   const valueRange = Math.max(0.001, maxValue - minValue);
-  return points
-    .map((point) => {
+
+  context.lineWidth = 2;
+  context.lineJoin = "round";
+  context.lineCap = "round";
+  for (const series of seriesList) {
+    const seriesPoints = pointsBySeries.get(series.id) ?? [];
+    if (seriesPoints.length === 0) {
+      continue;
+    }
+    const stride = Math.max(1, Math.ceil(seriesPoints.length / maxCanvasPointsPerSeries));
+    context.strokeStyle = series.color;
+    context.beginPath();
+    let moved = false;
+    for (let index = 0; index < seriesPoints.length; index += stride) {
+      const point = seriesPoints[index];
       const timestamp = Number.parseFloat(point.timestamp_host);
-      const x = 20 + ((timestamp - minTime) / timeRange) * 540;
-      const y = 150 - ((point.value - minValue) / valueRange) * 128;
-      return `${Math.max(20, Math.min(560, x))},${Math.max(18, Math.min(150, y))}`;
-    })
-    .join(" ");
+      const x = left + ((timestamp - minTime) / timeRange) * chartWidth;
+      const y = top + chartHeight - ((point.value - minValue) / valueRange) * chartHeight;
+      if (!moved) {
+        context.moveTo(x, y);
+        moved = true;
+      } else {
+        context.lineTo(x, y);
+      }
+    }
+    context.stroke();
+  }
 }
 
 function makeDummyFrame(bus: "CAN0" | "CAN1", id: number, index: number, tick: number): LatestFrame {
@@ -618,6 +779,11 @@ function makeDummyFrames(tick: number) {
 }
 
 function App() {
+  const plotCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const signalSampleKeysRef = React.useRef(new Set<string>());
+  const plotPointKeysRef = React.useRef(new Set<string>());
+  const plotPointsRef = React.useRef<PlotPointDto[]>([]);
+  const plotSeriesRef = React.useRef<PlotSeries[]>(samplePlotSeries);
   const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
@@ -638,6 +804,9 @@ function App() {
   const [plotLayoutPath, setPlotLayoutPath] = React.useState(
     "examples/orion.canrush-layout.json",
   );
+  const [capturePreviewPath, setCapturePreviewPath] = React.useState(
+    "examples/orion-sample-capture.csv",
+  );
   const [parseConfigName, setParseConfigName] = React.useState("example.canrush-parse.json");
   const [plotLayoutName, setPlotLayoutName] = React.useState("example.canrush-layout.json");
   const [parserSignals, setParserSignals] = React.useState(sampleParserSignals);
@@ -647,6 +816,7 @@ function App() {
   const [signalSamples, setSignalSamples] = React.useState<SignalSampleDto[]>([]);
   const [plotPoints, setPlotPoints] = React.useState<PlotPointDto[]>([]);
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
+  const [realtimePlot, setRealtimePlot] = React.useState(false);
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
 
@@ -669,16 +839,22 @@ function App() {
   const selectedSeries =
     plotSeries.find((series) => series.id === selectedSeriesId) ?? samplePlotSeries[0]!;
   const selectedPanelTitle = selectedSeries.panelTitle;
+  const visiblePlotPoints = filterRecentPlotPoints(plotPoints, plotVisibleWindowSeconds);
   const selectedSignalSamples = signalSamples.filter(
     (sample) => sample.signal_id === selectedSignal.id,
   );
-  const selectedSeriesPoints = plotPoints.filter((point) => point.series_id === selectedSeries.id);
-  const plotPointsBySeries = new Map<string, PlotPointDto[]>();
-  for (const point of plotPoints) {
-    const seriesPoints = plotPointsBySeries.get(point.series_id) ?? [];
-    seriesPoints.push(point);
-    plotPointsBySeries.set(point.series_id, seriesPoints);
-  }
+  const selectedSeriesPoints = visiblePlotPoints.filter(
+    (point) => point.series_id === selectedSeries.id,
+  );
+  const plotPointRows = visiblePlotPoints.slice(-maxPreviewTableRows);
+
+  React.useEffect(() => {
+    plotPointsRef.current = plotPoints;
+  }, [plotPoints]);
+
+  React.useEffect(() => {
+    plotSeriesRef.current = plotSeries;
+  }, [plotSeries]);
 
   React.useEffect(() => {
     if (visibleFrames.length === 0) {
@@ -833,7 +1009,7 @@ function App() {
       setSelectedSignalId(nextSignals[0]?.id ?? "");
       setParseConfigName(parseConfigPath);
       setEventLog("browser preview mode; parse config load is simulated");
-      return;
+      return true;
     }
 
     try {
@@ -848,8 +1024,10 @@ function App() {
       setPlotPoints([]);
       setParsePreviewStatus("config loaded");
       setEventLog(`loaded parse config: ${nextSignals.length} signal(s)`);
+      return true;
     } catch (error) {
       setEventLog(`parse config load failed: ${String(error)}`);
+      return false;
     }
   }
 
@@ -860,7 +1038,7 @@ function App() {
       setSelectedSeriesId(nextSeries[0]?.id ?? "");
       setPlotLayoutName(plotLayoutPath);
       setEventLog("browser preview mode; plot layout load is simulated");
-      return;
+      return true;
     }
 
     try {
@@ -874,12 +1052,53 @@ function App() {
       setPlotPoints([]);
       setParsePreviewStatus("layout loaded");
       setEventLog(`loaded plot layout: ${nextSeries.length} series`);
+      return true;
     } catch (error) {
       setEventLog(`plot layout load failed: ${String(error)}`);
+      return false;
     }
   }
 
-  async function refreshParsePlotPreview() {
+  async function toggleRealtimePlot() {
+    if (realtimePlot) {
+      setRealtimePlot(false);
+      setParsePreviewStatus("live stopped");
+      return;
+    }
+
+    const parseLoaded = await loadParseConfig();
+    const layoutLoaded = await loadPlotLayout();
+    if (!parseLoaded || !layoutLoaded) {
+      return;
+    }
+    setSignalSamples([]);
+    setPlotPoints([]);
+    signalSampleKeysRef.current.clear();
+    plotPointKeysRef.current.clear();
+    setRealtimePlot(true);
+    setParsePreviewStatus("live starting");
+  }
+
+  function applyParsePlotPreview(preview: ParsePlotPreviewDto, sourceLabel: string, append: boolean) {
+    if (append) {
+      setSignalSamples((current) =>
+        appendUniqueSamples(current, preview.samples, signalSampleKeysRef.current),
+      );
+      setPlotPoints((current) =>
+        appendUniquePlotPoints(current, preview.points, plotPointKeysRef.current),
+      );
+    } else {
+      setSignalSamples(preview.samples);
+      setPlotPoints(preview.points);
+      resetSeenSampleKeys(preview.samples, signalSampleKeysRef.current);
+      resetSeenPlotPointKeys(preview.points, plotPointKeysRef.current);
+    }
+    setParsePreviewStatus(
+      `${preview.samples.length} sample(s), ${preview.points.length} point(s) ${sourceLabel}`,
+    );
+  }
+
+  async function refreshParsePlotPreview(append = false) {
     if (!hasTauriRuntime()) {
       const previewSamples = parserSignals.map((signal, index) => ({
         timestamp_host: `${index * 0.5}`,
@@ -892,40 +1111,89 @@ function App() {
         quality: "ok",
         source_sequence: index + 1,
       }));
-      setSignalSamples(previewSamples);
-      setPlotPoints(
-        plotSeries.map((series, index) => ({
-          timestamp_host: `${index * 0.5}`,
-          panel_id: series.panelId,
-          series_id: series.id,
-          source_signal_id: series.signalId,
-          name: series.label,
-          value: previewSamples.find((sample) => sample.signal_id === series.signalId)?.value ?? 0,
-          unit: series.unit,
-          quality: "ok",
-          source_sequence: index + 1,
-        })),
-      );
-      setParsePreviewStatus(`preview: ${previewSamples.length} sample(s)`);
+      const previewPoints = plotSeries.map((series, index) => ({
+        timestamp_host: `${index * 0.5}`,
+        panel_id: series.panelId,
+        series_id: series.id,
+        source_signal_id: series.signalId,
+        name: series.label,
+        value: previewSamples.find((sample) => sample.signal_id === series.signalId)?.value ?? 0,
+        unit: series.unit,
+        quality: "ok",
+        source_sequence: index + 1,
+      }));
+      applyParsePlotPreview({ samples: previewSamples, points: previewPoints }, "preview", append);
       setEventLog("browser preview mode; parse and plot preview is simulated");
       return;
     }
 
     try {
-      const preview = await invoke<ParsePlotPreviewDto>("parse_plot_preview", {
-        parseConfigPath,
-        plotLayoutPath,
-      });
-      setSignalSamples(preview.samples);
-      setPlotPoints(preview.points);
-      setParsePreviewStatus(
-        `${preview.samples.length} sample(s), ${preview.points.length} point(s)`,
-      );
+      const preview = append
+        ? await invoke<ParsePlotPreviewDto>("parse_plot_preview_live")
+        : await invoke<ParsePlotPreviewDto>("parse_plot_preview", {
+            parseConfigPath,
+            plotLayoutPath,
+          });
+      applyParsePlotPreview(preview, append ? "live" : "", append);
       setEventLog(
         `parsed ${preview.samples.length} sample(s), built ${preview.points.length} plot point(s)`,
       );
     } catch (error) {
       setEventLog(`parse/plot preview failed: ${String(error)}`);
+    }
+  }
+
+  async function refreshCaptureFilePreview() {
+    if (!hasTauriRuntime()) {
+      const previewSamples = parserSignals.map((signal, index) => ({
+        timestamp_host: `${index * 0.5}`,
+        bus: signal.bus,
+        frame_id: signal.canId,
+        signal_id: signal.id,
+        name: signal.name,
+        value: sampleSignalValue(signal, index),
+        unit: signal.unit,
+        quality: "preview",
+        source_sequence: index + 1,
+      }));
+      const previewPoints = plotSeries.map((series, index) => ({
+        timestamp_host: `${index * 0.5}`,
+        panel_id: series.panelId,
+        series_id: series.id,
+        source_signal_id: series.signalId,
+        name: series.label,
+        value: previewSamples.find((sample) => sample.signal_id === series.signalId)?.value ?? 0,
+        unit: series.unit,
+        quality: "preview",
+        source_sequence: index + 1,
+      }));
+      setSignalSamples(previewSamples);
+      setPlotPoints(previewPoints);
+      resetSeenSampleKeys(previewSamples, signalSampleKeysRef.current);
+      resetSeenPlotPointKeys(previewPoints, plotPointKeysRef.current);
+      setParsePreviewStatus(`capture preview: ${previewSamples.length} sample(s)`);
+      setEventLog("browser preview mode; capture file preview is simulated");
+      return;
+    }
+
+    try {
+      const preview = await invoke<ParsePlotPreviewDto>("parse_plot_capture_file", {
+        parseConfigPath,
+        plotLayoutPath,
+        capturePath: capturePreviewPath,
+      });
+      setSignalSamples(preview.samples);
+      setPlotPoints(preview.points);
+      resetSeenSampleKeys(preview.samples, signalSampleKeysRef.current);
+      resetSeenPlotPointKeys(preview.points, plotPointKeysRef.current);
+      setParsePreviewStatus(
+        `${preview.samples.length} sample(s), ${preview.points.length} point(s) from CSV`,
+      );
+      setEventLog(
+        `parsed capture CSV: ${preview.samples.length} sample(s), ${preview.points.length} plot point(s)`,
+      );
+    } catch (error) {
+      setEventLog(`capture preview failed: ${String(error)}`);
     }
   }
 
@@ -1020,6 +1288,47 @@ function App() {
 
     return () => window.clearInterval(timer);
   }, [debugDummy, paused]);
+
+  React.useEffect(() => {
+    if (!realtimePlot) {
+      return undefined;
+    }
+
+    let inFlight = false;
+    const timer = window.setInterval(() => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      void refreshParsePlotPreview(true).finally(() => {
+        inFlight = false;
+      });
+    }, realtimePreviewIntervalMs);
+
+    return () => window.clearInterval(timer);
+  }, [realtimePlot, parseConfigPath, plotLayoutPath, parserSignals, plotSeries]);
+
+  React.useEffect(() => {
+    if (workspaceView !== "plotter") {
+      return undefined;
+    }
+
+    let animationFrame = 0;
+    let lastDrawAt = 0;
+    const draw = (timestamp: number) => {
+      if (timestamp - lastDrawAt >= plotRenderFrameMs) {
+        const canvas = plotCanvasRef.current;
+        if (canvas) {
+          drawPlotCanvas(canvas, plotSeriesRef.current, plotPointsRef.current);
+        }
+        lastDrawAt = timestamp;
+      }
+      animationFrame = window.requestAnimationFrame(draw);
+    };
+    animationFrame = window.requestAnimationFrame(draw);
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [workspaceView]);
 
   return (
     <main className="app-shell">
@@ -1371,14 +1680,33 @@ function App() {
                 onChange={(event) => setParseConfigPath(event.target.value)}
               />
             </label>
+            <label className="path-input">
+              Capture CSV
+              <input
+                value={capturePreviewPath}
+                onChange={(event) => setCapturePreviewPath(event.target.value)}
+              />
+            </label>
             <div className="stacked-actions">
               <button type="button" title="パース設定JSONを読み込み" onClick={loadParseConfig}>
                 <FileJson size={16} />
                 Load
               </button>
-              <button type="button" title="現在の受信データをパース" onClick={refreshParsePlotPreview}>
+              <button
+                type="button"
+                title="現在の受信データをパース"
+                onClick={() => refreshParsePlotPreview()}
+              >
                 <RefreshCw size={16} />
                 Parse
+              </button>
+              <button
+                type="button"
+                title="Capture CSVをパースしてプロット"
+                onClick={refreshCaptureFilePreview}
+              >
+                <LineChart size={16} />
+                CSV Plot
               </button>
             </div>
             <div className="signal-list">
@@ -1536,11 +1864,11 @@ function App() {
             <div className="config-metrics">
               <div>
                 <span>Points</span>
-                <strong>{plotPoints.length}</strong>
+                <strong>{visiblePlotPoints.length}</strong>
               </div>
               <div>
-                <span>Panels</span>
-                <strong>{new Set(plotSeries.map((series) => series.panelId)).size}</strong>
+                <span>Live</span>
+                <strong>{realtimePlot ? "running" : "stopped"}</strong>
               </div>
             </div>
             <label className="path-input">
@@ -1550,16 +1878,58 @@ function App() {
                 onChange={(event) => setPlotLayoutPath(event.target.value)}
               />
             </label>
+            <label className="path-input">
+              Capture CSV
+              <input
+                value={capturePreviewPath}
+                onChange={(event) => setCapturePreviewPath(event.target.value)}
+              />
+            </label>
             <div className="stacked-actions">
               <button type="button" title="プロットレイアウトJSONを読み込み" onClick={loadPlotLayout}>
                 <FileJson size={16} />
                 Load
               </button>
-              <button type="button" title="現在の受信データからプロットを生成" onClick={refreshParsePlotPreview}>
+              <button
+                type="button"
+                title="現在の受信データからプロットを生成"
+                onClick={() => refreshParsePlotPreview()}
+              >
                 <RefreshCw size={16} />
                 Plot
               </button>
+              <button
+                type="button"
+                title="Capture CSVをパースしてプロット"
+                onClick={refreshCaptureFilePreview}
+              >
+                <LineChart size={16} />
+                CSV Plot
+              </button>
+              <button
+                type="button"
+                title="リアルタイムプロット更新"
+                onClick={toggleRealtimePlot}
+              >
+                {realtimePlot ? <CirclePause size={16} /> : <Activity size={16} />}
+                {realtimePlot ? "Stop" : "Live"}
+              </button>
             </div>
+            <button
+              type="button"
+              className="wide-action"
+              title="プロット履歴をクリア"
+              onClick={() => {
+                setSignalSamples([]);
+                setPlotPoints([]);
+                signalSampleKeysRef.current.clear();
+                plotPointKeysRef.current.clear();
+                setParsePreviewStatus("cleared");
+              }}
+            >
+              <Square size={16} />
+              Clear Plot
+            </button>
             <div className="signal-list">
               {plotSeries.map((series) => (
                 <button
@@ -1641,20 +2011,11 @@ function App() {
             <div className="plot-preview">
               <div className="plot-preview-header">
                 <strong>{selectedPanelTitle}</strong>
-                <span>{plotPoints.length} plot point(s)</span>
+                <span>
+                  last {plotVisibleWindowSeconds}s / {visiblePlotPoints.length} point(s)
+                </span>
               </div>
-              <svg viewBox="0 0 580 170" role="img" aria-label="plot preview">
-                <line x1="20" y1="150" x2="560" y2="150" />
-                <line x1="20" y1="18" x2="20" y2="150" />
-                {plotSeries.map((series, index) => {
-                  const seriesPoints = plotPointsBySeries.get(series.id) ?? [];
-                  const points =
-                    seriesPoints.length > 0
-                      ? makePlotPolylineFromPoints(seriesPoints)
-                      : makePlotPolyline(index);
-                  return <polyline key={series.id} points={points} stroke={series.color} />;
-                })}
-              </svg>
+              <canvas ref={plotCanvasRef} role="img" aria-label="plot preview" />
               <div className="plot-legend">
                 {plotSeries.map((series) => (
                   <button
@@ -1682,7 +2043,7 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {plotPoints.map((point, index) => (
+                  {plotPointRows.map((point, index) => (
                     <tr key={`${point.panel_id}-${point.series_id}-${index}`}>
                       <td>{point.timestamp_host}</td>
                       <td>{point.panel_id}</td>
