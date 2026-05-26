@@ -1,0 +1,352 @@
+{
+  "version": 1,
+  "name": "orion-main-can-rx",
+  "description": "G474_Orion_main Core/Src/can_ibis.c parseCanCmd compatible receive parser",
+  "signals": [
+    {
+      "id": "orion_error_id",
+      "name": "error_id",
+      "selector": {
+        "bus": null,
+        "id": 0,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "unsigned-int",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 16,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "id"
+      }
+    },
+    {
+      "id": "orion_error_info",
+      "name": "error_info",
+      "selector": {
+        "bus": null,
+        "id": 0,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "unsigned-int",
+        "byte_offset": 2,
+        "bit_offset": 0,
+        "bit_length": 16,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "info"
+      }
+    },
+    {
+      "id": "orion_error_value",
+      "name": "error_value",
+      "selector": {
+        "bus": null,
+        "id": 0,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 4,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "value"
+      }
+    },
+    {
+      "id": "orion_motor0_rps",
+      "name": "motor0_rps",
+      "selector": {
+        "bus": null,
+        "id": 512,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "rps"
+      }
+    },
+    {
+      "id": "orion_motor0_angle_rad",
+      "name": "motor0_angle_rad",
+      "selector": {
+        "bus": null,
+        "id": 512,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 4,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": -1,
+        "offset": 0,
+        "unit": "rad"
+      }
+    },
+    {
+      "id": "orion_power_battery_voltage",
+      "name": "power_battery_voltage",
+      "selector": {
+        "bus": null,
+        "id": 533,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "V"
+      }
+    },
+    {
+      "id": "orion_temp_motor0",
+      "name": "temp_motor0",
+      "selector": {
+        "bus": null,
+        "id": 544,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "degC"
+      }
+    },
+    {
+      "id": "orion_temp_driver0",
+      "name": "temp_driver0",
+      "selector": {
+        "bus": null,
+        "id": 544,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 4,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "degC"
+      }
+    },
+    {
+      "id": "orion_temp_fet",
+      "name": "temp_fet",
+      "selector": {
+        "bus": null,
+        "id": 548,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "unsigned-int",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 8,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "degC"
+      }
+    },
+    {
+      "id": "orion_current0",
+      "name": "current0",
+      "selector": {
+        "bus": null,
+        "id": 560,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "A"
+      }
+    },
+    {
+      "id": "orion_ball_detect",
+      "name": "ball_detect",
+      "selector": {
+        "bus": null,
+        "id": 576,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "unsigned-int",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 8,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "bool"
+      }
+    },
+    {
+      "id": "orion_mouse_raw_x",
+      "name": "mouse_raw_x",
+      "selector": {
+        "bus": null,
+        "id": 577,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "signed-int",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 16,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "count"
+      }
+    },
+    {
+      "id": "orion_mouse_raw_y",
+      "name": "mouse_raw_y",
+      "selector": {
+        "bus": null,
+        "id": 577,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "signed-int",
+        "byte_offset": 2,
+        "bit_offset": 0,
+        "bit_length": 16,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "count"
+      }
+    },
+    {
+      "id": "orion_mouse_quality",
+      "name": "mouse_quality",
+      "selector": {
+        "bus": null,
+        "id": 577,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "unsigned-int",
+        "byte_offset": 4,
+        "bit_offset": 0,
+        "bit_length": 16,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "quality"
+      }
+    },
+    {
+      "id": "orion_motor0_param_rps",
+      "name": "motor0_param_rps",
+      "selector": {
+        "bus": null,
+        "id": 1280,
+        "id_format": "standard",
+        "frame_format": "classic",
+        "frame_type": "data"
+      },
+      "source": {
+        "data_type": "float32",
+        "byte_offset": 0,
+        "bit_offset": 0,
+        "bit_length": 32,
+        "endian": "little"
+      },
+      "conversion": {
+        "scale": 1,
+        "offset": 0,
+        "unit": "rps"
+      }
+    }
+  ]
+}

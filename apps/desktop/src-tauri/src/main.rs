@@ -16,6 +16,8 @@ use canrush_core::api::{
 };
 use canrush_core::endpoint::ServerEndpoint;
 use canrush_core::model::{CanFrame, Direction, FrameFormat, FrameType, IdFormat};
+use canrush_core::parser::{parse_frames, ParseConfig, SignalSample};
+use canrush_core::plot::{build_plot_points, PlotLayout, PlotPoint};
 use canrush_core::server::{FrameRateBucket, LatestFrameState, FRAME_RATE_BUCKET_MS};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +29,7 @@ const GUI_RATE_WINDOW_BUCKETS: u64 = 2;
 const SERVER_INFO_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const SERVER_HTTP_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -95,6 +98,12 @@ struct SnapshotDto {
     buses: Vec<BusStatusDto>,
     frames: Vec<LatestFrameDto>,
     event_log: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ParsePlotPreviewDto {
+    samples: Vec<SignalSample>,
+    points: Vec<PlotPoint>,
 }
 
 struct StreamRuntime {
@@ -220,10 +229,16 @@ fn clear_latest(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
 
 #[tauri::command]
 fn start_local_server(state: tauri::State<'_, ReceiverState>) -> Result<ServerInfoDto, String> {
+    start_local_server_for_state(&state.inner)
+}
+
+fn start_local_server_for_state(
+    shared: &Arc<Mutex<ReceiverInner>>,
+) -> Result<ServerInfoDto, String> {
     if let Ok(status) = get_json::<ServerStatusDto>("/api/v1/status") {
         let info = server_info_from_status(status, "external", "running", "", "existing server");
-        update_server_info(&state.inner, info.clone())?;
-        set_event_log(&state.inner, "using existing local server".to_string())?;
+        update_server_info(shared, info.clone())?;
+        set_event_log(shared, "using existing local server".to_string())?;
         return Ok(info);
     }
 
@@ -246,7 +261,7 @@ fn start_local_server(state: tauri::State<'_, ReceiverState>) -> Result<ServerIn
         .spawn()
         .map_err(|error| format!("failed to spawn {}: {error}", executable.display()))?;
     {
-        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+        let mut inner = shared.lock().map_err(|error| error.to_string())?;
         inner.server_process = Some(ServerProcessRuntime {
             child,
             started_at: Instant::now(),
@@ -262,24 +277,24 @@ fn start_local_server(state: tauri::State<'_, ReceiverState>) -> Result<ServerIn
         match get_json::<ServerStatusDto>("/api/v1/status") {
             Ok(status) => {
                 let info = server_info_from_status(status, "gui", "running", "", "server started");
-                update_server_info(&state.inner, info.clone())?;
+                update_server_info(shared, info.clone())?;
                 return Ok(info);
             }
             Err(status_error) => {
-                if let Some(exit_reason) = poll_server_process(&state.inner)? {
+                if let Some(exit_reason) = poll_server_process(shared)? {
                     let info = disconnected_server_info(
                         "gui",
                         "exited",
                         &exit_reason,
                         &format!("server startup failed: {exit_reason}"),
                     );
-                    update_server_info(&state.inner, info.clone())?;
+                    update_server_info(shared, info.clone())?;
                     return Err(info.message);
                 }
                 if Instant::now() >= deadline {
                     let message = format!("server startup timeout: {status_error}");
                     let info = disconnected_server_info("gui", "starting", "", &message);
-                    update_server_info(&state.inner, info.clone())?;
+                    update_server_info(shared, info.clone())?;
                     return Err(message);
                 }
                 thread::sleep(SERVER_POLL_INTERVAL);
@@ -337,6 +352,52 @@ fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto
     })
 }
 
+#[tauri::command]
+fn load_parse_config(path: String) -> Result<ParseConfig, String> {
+    let config = read_json_file::<ParseConfig>(&path)?;
+    config.validate().map_err(|error| error.to_string())?;
+    Ok(config)
+}
+
+#[tauri::command]
+fn load_plot_layout(path: String) -> Result<PlotLayout, String> {
+    let layout = read_json_file::<PlotLayout>(&path)?;
+    layout.validate().map_err(|error| error.to_string())?;
+    Ok(layout)
+}
+
+#[tauri::command]
+fn parse_plot_preview(
+    state: tauri::State<'_, ReceiverState>,
+    parse_config_path: String,
+    plot_layout_path: String,
+) -> Result<ParsePlotPreviewDto, String> {
+    parse_plot_preview_for_state(&state.inner, &parse_config_path, &plot_layout_path)
+}
+
+fn parse_plot_preview_for_state(
+    shared: &Arc<Mutex<ReceiverInner>>,
+    parse_config_path: &str,
+    plot_layout_path: &str,
+) -> Result<ParsePlotPreviewDto, String> {
+    let config = read_json_file::<ParseConfig>(parse_config_path)?;
+    config.validate().map_err(|error| error.to_string())?;
+    let layout = read_json_file::<PlotLayout>(plot_layout_path)?;
+    layout.validate().map_err(|error| error.to_string())?;
+
+    let frames = {
+        let inner = shared.lock().map_err(|error| error.to_string())?;
+        inner
+            .latest
+            .values()
+            .map(|latest| latest.frame.clone())
+            .collect::<Vec<_>>()
+    };
+    let samples = parse_frames(&config, &frames);
+    let points = build_plot_points(&layout, &samples);
+    Ok(ParsePlotPreviewDto { samples, points })
+}
+
 fn ensure_stream_worker(shared: &Arc<Mutex<ReceiverInner>>) -> Result<(), String> {
     let mut inner = shared.lock().map_err(|error| error.to_string())?;
     if inner.stream.is_some() {
@@ -350,6 +411,39 @@ fn ensure_stream_worker(shared: &Arc<Mutex<ReceiverInner>>) -> Result<(), String
     inner.stream = Some(StreamRuntime { stop, handle });
     inner.event_log = "server stream worker started".to_string();
     Ok(())
+}
+
+fn read_json_file<T>(path: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let resolved = resolve_existing_path(path)?;
+    let file = std::fs::File::open(&resolved)
+        .map_err(|error| format!("failed to open {}: {error}", resolved.display()))?;
+    serde_json::from_reader(file)
+        .map_err(|error| format!("failed to parse {}: {error}", resolved.display()))
+}
+
+fn resolve_existing_path(path: &str) -> Result<PathBuf, String> {
+    let input = PathBuf::from(path);
+    if input.is_absolute() && input.exists() {
+        return Ok(input);
+    }
+    if input.exists() {
+        return Ok(input);
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        manifest_dir.join(&input),
+        manifest_dir.join("..").join(&input),
+        manifest_dir.join("..").join("..").join(&input),
+        manifest_dir.join("..").join("..").join("..").join(&input),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| format!("file not found: {path}"))
 }
 
 fn run_stream_worker(shared: Arc<Mutex<ReceiverInner>>, stop: Arc<AtomicBool>) {
@@ -531,13 +625,10 @@ fn refresh_server_info(shared: &Arc<Mutex<ReceiverInner>>) -> Result<ServerInfoD
         }
     }
 
-    let endpoint = server_endpoint()?;
-    let endpoint_text = endpoint.to_string();
     let info = match get_json::<ServerStatusDto>("/api/v1/status") {
         Ok(status) => server_info_from_status(status, &owner, "running", "", "connected"),
         Err(error) => disconnected_server_info(&owner, "not-running", "", &error),
     };
-    debug_assert_eq!(info.endpoint, endpoint_text);
 
     update_server_info(shared, info.clone())?;
     Ok(info)
@@ -692,7 +783,13 @@ where
     T: DeserializeOwned,
 {
     let endpoint = server_endpoint()?;
-    let response = reqwest::blocking::get(format!("{}{}", endpoint.http_base_url(), path))
+    let client = reqwest::blocking::Client::builder()
+        .timeout(SERVER_HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(format!("{}{}", endpoint.http_base_url(), path))
+        .send()
         .map_err(|error| error.to_string())?;
     parse_response(response)
 }
@@ -703,7 +800,10 @@ where
     B: Serialize + ?Sized,
 {
     let endpoint = server_endpoint()?;
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(SERVER_HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
     let response = client
         .post(format!("{}{}", endpoint.http_base_url(), path))
         .json(body)
@@ -777,10 +877,150 @@ fn main() {
             clear_latest,
             start_local_server,
             latest_snapshot,
+            load_parse_config,
+            load_plot_layout,
+            parse_plot_preview,
         ])
         .run(tauri::generate_context!())
     {
         eprintln!("failed to run CANRush desktop app: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_manager_uses_existing_server_or_starts_gui_owned_server() {
+        if get_json::<ServerStatusDto>("/api/v1/status").is_ok() {
+            let state = ReceiverState::default();
+            let info = match start_local_server_for_state(&state.inner) {
+                Ok(info) => info,
+                Err(error) => panic!("failed to use existing server: {error}"),
+            };
+            assert!(info.connected);
+            assert_eq!(info.owner, "external");
+            assert_eq!(info.process_state, "running");
+            return;
+        }
+
+        let executable = match find_server_executable() {
+            Ok(executable) => executable,
+            Err(error) => panic!("server executable not found: {error}"),
+        };
+        let mut external = match Command::new(&executable)
+            .arg("--listen")
+            .arg("127.0.0.1:49000")
+            .arg("--server-name")
+            .arg("canrush-server-existing-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => panic!("failed to start external server: {error}"),
+        };
+        wait_for_server_status();
+
+        let external_state = ReceiverState::default();
+        let external_info = match start_local_server_for_state(&external_state.inner) {
+            Ok(info) => info,
+            Err(error) => panic!("failed to bind to external server: {error}"),
+        };
+        assert!(external_info.connected);
+        assert_eq!(external_info.owner, "external");
+        assert_eq!(external_info.process_state, "running");
+        assert_eq!(external_info.server_name, "canrush-server-existing-test");
+
+        if let Err(error) = external.kill() {
+            panic!("failed to kill external server: {error}");
+        }
+        if let Err(error) = external.wait() {
+            panic!("failed to wait external server: {error}");
+        }
+        wait_for_server_shutdown();
+
+        let gui_state = ReceiverState::default();
+        let gui_info = match start_local_server_for_state(&gui_state.inner) {
+            Ok(info) => info,
+            Err(error) => panic!("failed to start gui-owned server: {error}"),
+        };
+        assert!(gui_info.connected);
+        assert_eq!(gui_info.owner, "gui");
+        assert_eq!(gui_info.process_state, "running");
+        assert_eq!(gui_info.server_name, "canrush-server-gui");
+
+        let stopped = match poll_server_process(&gui_state.inner) {
+            Ok(stopped) => stopped,
+            Err(error) => panic!("failed to poll gui-owned server: {error}"),
+        };
+        assert!(stopped.is_none());
+    }
+
+    #[test]
+    fn parse_plot_preview_uses_loaded_config_and_latest_frames() {
+        let state = ReceiverState::default();
+        {
+            let mut inner = match state.inner.lock() {
+                Ok(inner) => inner,
+                Err(error) => panic!("failed to lock receiver state: {error}"),
+            };
+            let frame = match CanFrame::new_rx(
+                "CAN0",
+                "test",
+                0x200,
+                IdFormat::Standard,
+                FrameFormat::Classic,
+                FrameType::Data,
+                8,
+                [1.5_f32.to_le_bytes(), (-2.25_f32).to_le_bytes()].concat(),
+            ) {
+                Ok(frame) => frame,
+                Err(error) => panic!("failed to build test frame: {error}"),
+            };
+            inner.latest.ingest(frame);
+        }
+
+        let preview = match parse_plot_preview_for_state(
+            &state.inner,
+            "examples/orion.canrush-parse.json",
+            "examples/orion.canrush-layout.json",
+        ) {
+            Ok(preview) => preview,
+            Err(error) => panic!("failed to build parse/plot preview: {error}"),
+        };
+
+        assert_eq!(preview.samples.len(), 2);
+        assert_eq!(preview.points.len(), 2);
+        assert_eq!(preview.samples[0].signal_id, "orion_motor0_rps");
+        assert_eq!(preview.samples[0].value, 1.5);
+        assert_eq!(preview.samples[1].signal_id, "orion_motor0_angle_rad");
+        assert_eq!(preview.samples[1].value, 2.25);
+    }
+
+    fn wait_for_server_status() {
+        let deadline = Instant::now() + SERVER_STARTUP_TIMEOUT;
+        loop {
+            if get_json::<ServerStatusDto>("/api/v1/status").is_ok() {
+                return;
+            }
+            assert!(Instant::now() < deadline, "server did not start");
+            thread::sleep(SERVER_POLL_INTERVAL);
+        }
+    }
+
+    fn wait_for_server_shutdown() {
+        let deadline = Instant::now() + SERVER_STARTUP_TIMEOUT;
+        loop {
+            if get_json::<ServerStatusDto>("/api/v1/status").is_err() {
+                return;
+            }
+            assert!(Instant::now() < deadline, "server did not stop");
+            thread::sleep(SERVER_POLL_INTERVAL);
+        }
     }
 }

@@ -38,6 +38,7 @@ impl ParseConfig {
                     frame_type: Some(FrameTypeName::Data),
                 },
                 source: SignalSource {
+                    data_type: SignalDataType::UnsignedInt,
                     byte_offset: 0,
                     bit_offset: 0,
                     bit_length: 16,
@@ -93,19 +94,48 @@ impl SignalDefinition {
                 self.id
             )));
         }
-        if self.source.bit_length == 0 || self.source.bit_length > 64 {
-            return Err(CanrushError::InvalidArgument(format!(
-                "signal bit_length must be 1..64: {}",
-                self.id
-            )));
+        self.source.validate(&self.id)?;
+        Ok(())
+    }
+}
+
+impl SignalSource {
+    fn validate(&self, signal_id: &str) -> Result<()> {
+        match self.effective_data_type() {
+            SignalDataType::UnsignedInt | SignalDataType::SignedInt => {
+                if self.bit_length == 0 || self.bit_length > 64 {
+                    return Err(CanrushError::InvalidArgument(format!(
+                        "signal bit_length must be 1..64: {signal_id}"
+                    )));
+                }
+            }
+            SignalDataType::Float32 => {
+                if self.bit_offset != 0 {
+                    return Err(CanrushError::InvalidArgument(format!(
+                        "float32 signal bit_offset must be 0: {signal_id}"
+                    )));
+                }
+                if self.bit_length != 32 {
+                    return Err(CanrushError::InvalidArgument(format!(
+                        "float32 signal bit_length must be 32: {signal_id}"
+                    )));
+                }
+            }
         }
-        if self.source.bit_offset > 7 {
+        if self.bit_offset > 7 {
             return Err(CanrushError::InvalidArgument(format!(
-                "signal bit_offset must be 0..7: {}",
-                self.id
+                "signal bit_offset must be 0..7: {signal_id}"
             )));
         }
         Ok(())
+    }
+
+    fn effective_data_type(&self) -> SignalDataType {
+        if self.signed && self.data_type == SignalDataType::UnsignedInt {
+            SignalDataType::SignedInt
+        } else {
+            self.data_type
+        }
     }
 }
 
@@ -136,12 +166,23 @@ impl FrameSelector {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignalSource {
+    #[serde(default)]
+    pub data_type: SignalDataType,
     pub byte_offset: usize,
     pub bit_offset: u8,
     pub bit_length: u8,
     pub endian: Endian,
     #[serde(default)]
     pub signed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignalDataType {
+    #[default]
+    UnsignedInt,
+    SignedInt,
+    Float32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -317,25 +358,18 @@ pub fn write_signal_csv(writer: &mut impl Write, samples: &[SignalSample]) -> Re
 }
 
 fn signal_sample(signal: &SignalDefinition, frame: &CanFrame, sequence: u64) -> SignalSample {
-    match extract_signal_raw(&frame.data, &signal.source) {
-        Some(raw) => {
-            let raw = if signal.source.signed {
-                sign_extend(raw, signal.source.bit_length) as f64
-            } else {
-                raw as f64
-            };
-            SignalSample {
-                timestamp_host: format_timestamp(frame),
-                bus: frame.bus.clone(),
-                frame_id: format!("0x{:X}", frame.id),
-                signal_id: signal.id.clone(),
-                name: signal.name.clone(),
-                value: raw * signal.conversion.scale + signal.conversion.offset,
-                unit: signal.conversion.unit.clone(),
-                quality: SignalQuality::Ok,
-                source_sequence: sequence,
-            }
-        }
+    match extract_signal_value(&frame.data, &signal.source) {
+        Some(raw) => SignalSample {
+            timestamp_host: format_timestamp(frame),
+            bus: frame.bus.clone(),
+            frame_id: format!("0x{:X}", frame.id),
+            signal_id: signal.id.clone(),
+            name: signal.name.clone(),
+            value: raw * signal.conversion.scale + signal.conversion.offset,
+            unit: signal.conversion.unit.clone(),
+            quality: SignalQuality::Ok,
+            source_sequence: sequence,
+        },
         None => SignalSample {
             timestamp_host: format_timestamp(frame),
             bus: frame.bus.clone(),
@@ -350,6 +384,16 @@ fn signal_sample(signal: &SignalDefinition, frame: &CanFrame, sequence: u64) -> 
     }
 }
 
+fn extract_signal_value(data: &[u8], source: &SignalSource) -> Option<f64> {
+    match source.effective_data_type() {
+        SignalDataType::UnsignedInt => extract_signal_raw(data, source).map(|raw| raw as f64),
+        SignalDataType::SignedInt => {
+            extract_signal_raw(data, source).map(|raw| sign_extend(raw, source.bit_length) as f64)
+        }
+        SignalDataType::Float32 => extract_float32(data, source),
+    }
+}
+
 fn extract_signal_raw(data: &[u8], source: &SignalSource) -> Option<u64> {
     let start_bit = source.byte_offset.checked_mul(8)? + usize::from(source.bit_offset);
     let bit_length = usize::from(source.bit_length);
@@ -360,6 +404,18 @@ fn extract_signal_raw(data: &[u8], source: &SignalSource) -> Option<u64> {
         Endian::Little => extract_little_endian(data, start_bit, bit_length),
         Endian::Big => extract_big_endian(data, start_bit, bit_length),
     }
+}
+
+fn extract_float32(data: &[u8], source: &SignalSource) -> Option<f64> {
+    let end = source.byte_offset.checked_add(4)?;
+    let bytes = data.get(source.byte_offset..end)?;
+    let mut array = [0_u8; 4];
+    array.copy_from_slice(bytes);
+    let value = match source.endian {
+        Endian::Little => f32::from_le_bytes(array),
+        Endian::Big => f32::from_be_bytes(array),
+    };
+    Some(f64::from(value))
 }
 
 fn extract_little_endian(data: &[u8], start_bit: usize, bit_length: usize) -> Option<u64> {
@@ -629,6 +685,7 @@ mod tests {
                     frame_type: None,
                 },
                 source: SignalSource {
+                    data_type: SignalDataType::UnsignedInt,
                     byte_offset: 0,
                     bit_offset: 0,
                     bit_length: 8,
@@ -647,6 +704,82 @@ mod tests {
 
         assert_eq!(samples[0].value, 0.0);
         assert_eq!(samples[0].unit, "V");
+    }
+
+    #[test]
+    fn parses_float32_little_endian_signal() {
+        let frame = CanFrame::new_rx(
+            "CAN0",
+            "fake",
+            0x200,
+            IdFormat::Standard,
+            FrameFormat::Classic,
+            FrameType::Data,
+            8,
+            [1.5_f32.to_le_bytes(), (-2.25_f32).to_le_bytes()].concat(),
+        )
+        .unwrap();
+        let config = ParseConfig {
+            version: 1,
+            name: "float32".to_string(),
+            description: String::new(),
+            signals: vec![
+                SignalDefinition {
+                    id: "motor_rps".to_string(),
+                    name: "motor_rps".to_string(),
+                    selector: FrameSelector {
+                        bus: Some("CAN0".to_string()),
+                        id: 0x200,
+                        id_format: None,
+                        frame_format: None,
+                        frame_type: None,
+                    },
+                    source: SignalSource {
+                        data_type: SignalDataType::Float32,
+                        byte_offset: 0,
+                        bit_offset: 0,
+                        bit_length: 32,
+                        endian: Endian::Little,
+                        signed: false,
+                    },
+                    conversion: SignalConversion {
+                        scale: 1.0,
+                        offset: 0.0,
+                        unit: "rps".to_string(),
+                    },
+                },
+                SignalDefinition {
+                    id: "motor_angle".to_string(),
+                    name: "motor_angle".to_string(),
+                    selector: FrameSelector {
+                        bus: Some("CAN0".to_string()),
+                        id: 0x200,
+                        id_format: None,
+                        frame_format: None,
+                        frame_type: None,
+                    },
+                    source: SignalSource {
+                        data_type: SignalDataType::Float32,
+                        byte_offset: 4,
+                        bit_offset: 0,
+                        bit_length: 32,
+                        endian: Endian::Little,
+                        signed: false,
+                    },
+                    conversion: SignalConversion {
+                        scale: -1.0,
+                        offset: 0.0,
+                        unit: "rad".to_string(),
+                    },
+                },
+            ],
+        };
+
+        let samples = parse_frame(&config, &frame, 1);
+
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0].value, 1.5);
+        assert_eq!(samples[1].value, 2.25);
     }
 
     #[test]

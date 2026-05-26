@@ -499,6 +499,59 @@ label {
   font-size: 14px;
 }
 
+.config-metrics,
+.workspace-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.workspace-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.config-metrics div,
+.workspace-summary div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #d9e1e3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.config-metrics span,
+.workspace-summary span {
+  display: block;
+  color: #66747a;
+  font-size: 11px;
+}
+
+.config-metrics strong,
+.workspace-summary strong {
+  display: block;
+  overflow: hidden;
+  color: #17202a;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-input {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  color: #516169;
+  font-size: 12px;
+}
+
+.path-input input {
+  width: 100%;
+  min-width: 0;
+}
+
 .stacked-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

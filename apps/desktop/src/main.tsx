@@ -128,6 +128,7 @@ type ParserSignal = {
   name: string;
   bus: string;
   canId: string;
+  dataType: string;
   byteOffset: number;
   bitOffset: number;
   bitLength: number;
@@ -140,6 +141,8 @@ type ParserSignal = {
 
 type PlotSeries = {
   id: string;
+  panelId: string;
+  panelTitle: string;
   signalId: string;
   label: string;
   axis: "left" | "right";
@@ -147,6 +150,88 @@ type PlotSeries = {
   offset: number;
   unit: string;
   color: string;
+};
+
+type ParseConfigDto = {
+  version: number;
+  name: string;
+  description: string;
+  signals: ParseSignalDto[];
+};
+
+type ParseSignalDto = {
+  id: string;
+  name: string;
+  selector: {
+    bus: string | null;
+    id: number;
+  };
+  source: {
+    data_type?: string;
+    byte_offset: number;
+    bit_offset: number;
+    bit_length: number;
+    endian: "little" | "big";
+    signed?: boolean;
+  };
+  conversion: {
+    scale: number;
+    offset: number;
+    unit?: string;
+  };
+};
+
+type PlotLayoutDto = {
+  version: number;
+  name: string;
+  description: string;
+  panels: PlotPanelDto[];
+};
+
+type PlotPanelDto = {
+  id: string;
+  title: string;
+  series: PlotSeriesDto[];
+};
+
+type PlotSeriesDto = {
+  id: string;
+  signal_id: string;
+  label: string;
+  color: string;
+  axis: "left" | "right";
+  scale: number;
+  offset: number;
+  unit_override: string | null;
+};
+
+type SignalSampleDto = {
+  timestamp_host: string;
+  bus: string;
+  frame_id: string;
+  signal_id: string;
+  name: string;
+  value: number;
+  unit: string;
+  quality: string;
+  source_sequence: number;
+};
+
+type PlotPointDto = {
+  timestamp_host: string;
+  panel_id: string;
+  series_id: string;
+  source_signal_id: string;
+  name: string;
+  value: number;
+  unit: string;
+  quality: string;
+  source_sequence: number;
+};
+
+type ParsePlotPreviewDto = {
+  samples: SignalSampleDto[];
+  points: PlotPointDto[];
 };
 
 const dummyIds = [0x103, 0x110, 0x180, 0x201, 0x2a0, 0x305, 0x3f2, 0x420];
@@ -246,6 +331,7 @@ const sampleParserSignals: ParserSignal[] = [
     name: "example_value",
     bus: "CAN0",
     canId: "0x100",
+    dataType: "unsigned-int",
     byteOffset: 0,
     bitOffset: 0,
     bitLength: 16,
@@ -260,6 +346,7 @@ const sampleParserSignals: ParserSignal[] = [
     name: "module_temp",
     bus: "CAN1",
     canId: "0x110",
+    dataType: "signed-int",
     byteOffset: 2,
     bitOffset: 0,
     bitLength: 12,
@@ -274,6 +361,8 @@ const sampleParserSignals: ParserSignal[] = [
 const samplePlotSeries: PlotSeries[] = [
   {
     id: "example_value",
+    panelId: "main",
+    panelTitle: "Main",
     signalId: "can0_100_u16",
     label: "Example value",
     axis: "left",
@@ -284,6 +373,8 @@ const samplePlotSeries: PlotSeries[] = [
   },
   {
     id: "module_temp",
+    panelId: "main",
+    panelTitle: "Main",
     signalId: "can1_110_temp",
     label: "Module temp",
     axis: "right",
@@ -425,6 +516,42 @@ function sampleSignalValue(signal: ParserSignal, index: number) {
   return raw * signal.scale + signal.offset;
 }
 
+function mapParseConfig(config: ParseConfigDto): ParserSignal[] {
+  return config.signals.map((signal) => ({
+    id: signal.id,
+    name: signal.name,
+    bus: signal.selector.bus ?? "ALL",
+    canId: formatCanId(`0x${signal.selector.id.toString(16)}`, "standard"),
+    dataType:
+      signal.source.data_type ?? (signal.source.signed ? "signed-int" : "unsigned-int"),
+    byteOffset: signal.source.byte_offset,
+    bitOffset: signal.source.bit_offset,
+    bitLength: signal.source.bit_length,
+    endian: signal.source.endian,
+    signed: signal.source.data_type === "signed-int" || Boolean(signal.source.signed),
+    scale: signal.conversion.scale,
+    offset: signal.conversion.offset,
+    unit: signal.conversion.unit ?? "",
+  }));
+}
+
+function mapPlotLayout(layout: PlotLayoutDto): PlotSeries[] {
+  return layout.panels.flatMap((panel) =>
+    panel.series.map((series) => ({
+      id: series.id,
+      panelId: panel.id,
+      panelTitle: panel.title,
+      signalId: series.signal_id,
+      label: series.label,
+      axis: series.axis,
+      scale: series.scale,
+      offset: series.offset,
+      unit: series.unit_override ?? "",
+      color: series.color,
+    })),
+  );
+}
+
 function makePlotPolyline(index: number) {
   return Array.from({ length: 16 }, (_, pointIndex) => {
     const x = 20 + pointIndex * 34;
@@ -432,6 +559,28 @@ function makePlotPolyline(index: number) {
     const y = 108 - wave * (24 + index * 10) - pointIndex * (index === 0 ? 1.2 : -0.4);
     return `${x},${Math.max(18, Math.min(142, y))}`;
   }).join(" ");
+}
+
+function makePlotPolylineFromPoints(points: PlotPointDto[]) {
+  if (points.length === 0) {
+    return "";
+  }
+  const timestamps = points.map((point) => Number.parseFloat(point.timestamp_host));
+  const values = points.map((point) => point.value).filter(Number.isFinite);
+  const minTime = Math.min(...timestamps);
+  const maxTime = Math.max(...timestamps);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const timeRange = Math.max(0.001, maxTime - minTime);
+  const valueRange = Math.max(0.001, maxValue - minValue);
+  return points
+    .map((point) => {
+      const timestamp = Number.parseFloat(point.timestamp_host);
+      const x = 20 + ((timestamp - minTime) / timeRange) * 540;
+      const y = 150 - ((point.value - minValue) / valueRange) * 128;
+      return `${Math.max(20, Math.min(560, x))},${Math.max(18, Math.min(150, y))}`;
+    })
+    .join(" ");
 }
 
 function makeDummyFrame(bus: "CAN0" | "CAN1", id: number, index: number, tick: number): LatestFrame {
@@ -483,10 +632,21 @@ function App() {
   const [connected, setConnected] = React.useState(false);
   const [serverInfo, setServerInfo] = React.useState(initialServerInfo);
   const [eventLog, setEventLog] = React.useState("server client ready");
-  const [parserSignals] = React.useState(sampleParserSignals);
+  const [parseConfigPath, setParseConfigPath] = React.useState(
+    "examples/orion.canrush-parse.json",
+  );
+  const [plotLayoutPath, setPlotLayoutPath] = React.useState(
+    "examples/orion.canrush-layout.json",
+  );
+  const [parseConfigName, setParseConfigName] = React.useState("example.canrush-parse.json");
+  const [plotLayoutName, setPlotLayoutName] = React.useState("example.canrush-layout.json");
+  const [parserSignals, setParserSignals] = React.useState(sampleParserSignals);
   const [selectedSignalId, setSelectedSignalId] = React.useState(sampleParserSignals[0].id);
-  const [plotSeries] = React.useState(samplePlotSeries);
+  const [plotSeries, setPlotSeries] = React.useState(samplePlotSeries);
   const [selectedSeriesId, setSelectedSeriesId] = React.useState(samplePlotSeries[0].id);
+  const [signalSamples, setSignalSamples] = React.useState<SignalSampleDto[]>([]);
+  const [plotPoints, setPlotPoints] = React.useState<PlotPointDto[]>([]);
+  const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
 
@@ -505,9 +665,20 @@ function App() {
   const selectedFrame =
     visibleFrames.find((frame) => frame.rowKey === selectedFrameId) ?? visibleFrames[0];
   const selectedSignal =
-    parserSignals.find((signal) => signal.id === selectedSignalId) ?? parserSignals[0];
+    parserSignals.find((signal) => signal.id === selectedSignalId) ?? sampleParserSignals[0]!;
   const selectedSeries =
-    plotSeries.find((series) => series.id === selectedSeriesId) ?? plotSeries[0];
+    plotSeries.find((series) => series.id === selectedSeriesId) ?? samplePlotSeries[0]!;
+  const selectedPanelTitle = selectedSeries.panelTitle;
+  const selectedSignalSamples = signalSamples.filter(
+    (sample) => sample.signal_id === selectedSignal.id,
+  );
+  const selectedSeriesPoints = plotPoints.filter((point) => point.series_id === selectedSeries.id);
+  const plotPointsBySeries = new Map<string, PlotPointDto[]>();
+  for (const point of plotPoints) {
+    const seriesPoints = plotPointsBySeries.get(point.series_id) ?? [];
+    seriesPoints.push(point);
+    plotPointsBySeries.set(point.series_id, seriesPoints);
+  }
 
   React.useEffect(() => {
     if (visibleFrames.length === 0) {
@@ -655,6 +826,109 @@ function App() {
     setEventLog("view cleared");
   }
 
+  async function loadParseConfig() {
+    if (!hasTauriRuntime()) {
+      const nextSignals = sampleParserSignals;
+      setParserSignals(nextSignals);
+      setSelectedSignalId(nextSignals[0]?.id ?? "");
+      setParseConfigName(parseConfigPath);
+      setEventLog("browser preview mode; parse config load is simulated");
+      return;
+    }
+
+    try {
+      const config = await invoke<ParseConfigDto>("load_parse_config", {
+        path: parseConfigPath,
+      });
+      const nextSignals = mapParseConfig(config);
+      setParserSignals(nextSignals);
+      setSelectedSignalId(nextSignals[0]?.id ?? "");
+      setParseConfigName(config.name || parseConfigPath);
+      setSignalSamples([]);
+      setPlotPoints([]);
+      setParsePreviewStatus("config loaded");
+      setEventLog(`loaded parse config: ${nextSignals.length} signal(s)`);
+    } catch (error) {
+      setEventLog(`parse config load failed: ${String(error)}`);
+    }
+  }
+
+  async function loadPlotLayout() {
+    if (!hasTauriRuntime()) {
+      const nextSeries = samplePlotSeries;
+      setPlotSeries(nextSeries);
+      setSelectedSeriesId(nextSeries[0]?.id ?? "");
+      setPlotLayoutName(plotLayoutPath);
+      setEventLog("browser preview mode; plot layout load is simulated");
+      return;
+    }
+
+    try {
+      const layout = await invoke<PlotLayoutDto>("load_plot_layout", {
+        path: plotLayoutPath,
+      });
+      const nextSeries = mapPlotLayout(layout);
+      setPlotSeries(nextSeries);
+      setSelectedSeriesId(nextSeries[0]?.id ?? "");
+      setPlotLayoutName(layout.name || plotLayoutPath);
+      setPlotPoints([]);
+      setParsePreviewStatus("layout loaded");
+      setEventLog(`loaded plot layout: ${nextSeries.length} series`);
+    } catch (error) {
+      setEventLog(`plot layout load failed: ${String(error)}`);
+    }
+  }
+
+  async function refreshParsePlotPreview() {
+    if (!hasTauriRuntime()) {
+      const previewSamples = parserSignals.map((signal, index) => ({
+        timestamp_host: `${index * 0.5}`,
+        bus: signal.bus,
+        frame_id: signal.canId,
+        signal_id: signal.id,
+        name: signal.name,
+        value: sampleSignalValue(signal, index),
+        unit: signal.unit,
+        quality: "ok",
+        source_sequence: index + 1,
+      }));
+      setSignalSamples(previewSamples);
+      setPlotPoints(
+        plotSeries.map((series, index) => ({
+          timestamp_host: `${index * 0.5}`,
+          panel_id: series.panelId,
+          series_id: series.id,
+          source_signal_id: series.signalId,
+          name: series.label,
+          value: previewSamples.find((sample) => sample.signal_id === series.signalId)?.value ?? 0,
+          unit: series.unit,
+          quality: "ok",
+          source_sequence: index + 1,
+        })),
+      );
+      setParsePreviewStatus(`preview: ${previewSamples.length} sample(s)`);
+      setEventLog("browser preview mode; parse and plot preview is simulated");
+      return;
+    }
+
+    try {
+      const preview = await invoke<ParsePlotPreviewDto>("parse_plot_preview", {
+        parseConfigPath,
+        plotLayoutPath,
+      });
+      setSignalSamples(preview.samples);
+      setPlotPoints(preview.points);
+      setParsePreviewStatus(
+        `${preview.samples.length} sample(s), ${preview.points.length} point(s)`,
+      );
+      setEventLog(
+        `parsed ${preview.samples.length} sample(s), built ${preview.points.length} plot point(s)`,
+      );
+    } catch (error) {
+      setEventLog(`parse/plot preview failed: ${String(error)}`);
+    }
+  }
+
   function updateBus(index: number, patch: Partial<BusConfig>) {
     setBuses((current) =>
       current.map((bus, busIndex) => (busIndex === index ? { ...bus, ...patch } : bus)),
@@ -670,7 +944,13 @@ function App() {
       return undefined;
     }
 
+    let inFlight = false;
+    const intervalMs = serverInfo.connected ? 33 : 1000;
     const timer = window.setInterval(async () => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
       try {
         const snapshot = await invoke<SnapshotDto>("latest_snapshot");
         setServerInfo(snapshot.server);
@@ -702,11 +982,13 @@ function App() {
         }
       } catch (error) {
         setEventLog(`snapshot failed: ${String(error)}`);
+      } finally {
+        inFlight = false;
       }
-    }, 33);
+    }, intervalMs);
 
     return () => window.clearInterval(timer);
-  }, [paused, debugDummy]);
+  }, [paused, debugDummy, serverInfo.connected]);
 
   React.useEffect(() => {
     if (!debugDummy) {
@@ -1069,17 +1351,34 @@ function App() {
               <h2>Parse Config</h2>
             </div>
             <div className="config-summary">
-              <span>example.canrush-parse.json</span>
+              <span>{parseConfigName}</span>
               <strong>{parserSignals.length} signals</strong>
             </div>
+            <div className="config-metrics">
+              <div>
+                <span>Parsed</span>
+                <strong>{signalSamples.length}</strong>
+              </div>
+              <div>
+                <span>Status</span>
+                <strong>{parsePreviewStatus}</strong>
+              </div>
+            </div>
+            <label className="path-input">
+              Config path
+              <input
+                value={parseConfigPath}
+                onChange={(event) => setParseConfigPath(event.target.value)}
+              />
+            </label>
             <div className="stacked-actions">
-              <button type="button" title="後続実装でファイル選択に接続">
+              <button type="button" title="パース設定JSONを読み込み" onClick={loadParseConfig}>
                 <FileJson size={16} />
                 Load
               </button>
-              <button type="button" title="後続実装で保存に接続">
-                <Download size={16} />
-                Save
+              <button type="button" title="現在の受信データをパース" onClick={refreshParsePlotPreview}>
+                <RefreshCw size={16} />
+                Parse
               </button>
             </div>
             <div className="signal-list">
@@ -1092,7 +1391,7 @@ function App() {
                 >
                   <span>{signal.name}</span>
                   <strong>
-                    {signal.bus} {signal.canId}
+                    {signal.bus} {signal.canId} / {signal.dataType}
                   </strong>
                 </button>
               ))}
@@ -1103,6 +1402,22 @@ function App() {
             <div className="panel-heading">
               <SlidersHorizontal size={18} />
               <h2>Signal Editor</h2>
+            </div>
+            <div className="workspace-summary">
+              <div>
+                <span>Selected samples</span>
+                <strong>{selectedSignalSamples.length}</strong>
+              </div>
+              <div>
+                <span>Source</span>
+                <strong>
+                  {selectedSignal.bus} {selectedSignal.canId}
+                </strong>
+              </div>
+              <div>
+                <span>Type</span>
+                <strong>{selectedSignal.dataType}</strong>
+              </div>
             </div>
             <div className="editor-grid">
               <label>
@@ -1122,6 +1437,10 @@ function App() {
               <label>
                 CAN ID
                 <input value={selectedSignal.canId} readOnly />
+              </label>
+              <label>
+                Type
+                <input value={selectedSignal.dataType} readOnly />
               </label>
               <label>
                 Byte
@@ -1165,6 +1484,8 @@ function App() {
                 <thead>
                   <tr>
                     <th>timestamp</th>
+                    <th>bus</th>
+                    <th>frame</th>
                     <th>signal</th>
                     <th>value</th>
                     <th>unit</th>
@@ -1172,13 +1493,26 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {parserSignals.map((signal, index) => (
-                    <tr key={signal.id}>
-                      <td>+{(index * 0.5).toFixed(3)}s</td>
-                      <td>{signal.id}</td>
-                      <td className="mono">{sampleSignalValue(signal, index).toFixed(3)}</td>
-                      <td>{signal.unit}</td>
-                      <td>ok</td>
+                  {(signalSamples.length > 0
+                    ? signalSamples
+                    : parserSignals.map((signal, index) => ({
+                        timestamp_host: `+${(index * 0.5).toFixed(3)}s`,
+                        bus: signal.bus,
+                        frame_id: signal.canId,
+                        signal_id: signal.id,
+                        value: sampleSignalValue(signal, index),
+                        unit: signal.unit,
+                        quality: "preview",
+                      }))
+                  ).map((sample, index) => (
+                    <tr key={`${sample.signal_id}-${index}`}>
+                      <td>{sample.timestamp_host}</td>
+                      <td>{sample.bus}</td>
+                      <td className="mono">{sample.frame_id}</td>
+                      <td>{sample.signal_id}</td>
+                      <td className="mono">{sample.value.toFixed(3)}</td>
+                      <td>{sample.unit}</td>
+                      <td>{sample.quality}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1196,17 +1530,34 @@ function App() {
               <h2>Plot Layout</h2>
             </div>
             <div className="config-summary">
-              <span>example.canrush-layout.json</span>
+              <span>{plotLayoutName}</span>
               <strong>{plotSeries.length} series</strong>
             </div>
+            <div className="config-metrics">
+              <div>
+                <span>Points</span>
+                <strong>{plotPoints.length}</strong>
+              </div>
+              <div>
+                <span>Panels</span>
+                <strong>{new Set(plotSeries.map((series) => series.panelId)).size}</strong>
+              </div>
+            </div>
+            <label className="path-input">
+              Layout path
+              <input
+                value={plotLayoutPath}
+                onChange={(event) => setPlotLayoutPath(event.target.value)}
+              />
+            </label>
             <div className="stacked-actions">
-              <button type="button" title="後続実装でレイアウト読み込みに接続">
+              <button type="button" title="プロットレイアウトJSONを読み込み" onClick={loadPlotLayout}>
                 <FileJson size={16} />
                 Load
               </button>
-              <button type="button" title="後続実装でレイアウト保存に接続">
-                <Download size={16} />
-                Save
+              <button type="button" title="現在の受信データからプロットを生成" onClick={refreshParsePlotPreview}>
+                <RefreshCw size={16} />
+                Plot
               </button>
             </div>
             <div className="signal-list">
@@ -1218,7 +1569,9 @@ function App() {
                   onClick={() => setSelectedSeriesId(series.id)}
                 >
                   <span>{series.label}</span>
-                  <strong>{series.signalId}</strong>
+                  <strong>
+                    {series.panelId} / {series.signalId}
+                  </strong>
                 </button>
               ))}
             </div>
@@ -1229,10 +1582,28 @@ function App() {
               <SlidersHorizontal size={18} />
               <h2>Series Editor</h2>
             </div>
+            <div className="workspace-summary">
+              <div>
+                <span>Selected points</span>
+                <strong>{selectedSeriesPoints.length}</strong>
+              </div>
+              <div>
+                <span>Panel</span>
+                <strong>{selectedSeries.panelTitle}</strong>
+              </div>
+              <div>
+                <span>Signal</span>
+                <strong>{selectedSeries.signalId}</strong>
+              </div>
+            </div>
             <div className="editor-grid plot-editor-grid">
               <label>
                 Series ID
                 <input value={selectedSeries.id} readOnly />
+              </label>
+              <label>
+                Panel
+                <input value={selectedSeries.panelTitle} readOnly />
               </label>
               <label>
                 Source signal
@@ -1269,19 +1640,20 @@ function App() {
 
             <div className="plot-preview">
               <div className="plot-preview-header">
-                <strong>Main</strong>
-                <span>offline signals CSV preview</span>
+                <strong>{selectedPanelTitle}</strong>
+                <span>{plotPoints.length} plot point(s)</span>
               </div>
               <svg viewBox="0 0 580 170" role="img" aria-label="plot preview">
                 <line x1="20" y1="150" x2="560" y2="150" />
                 <line x1="20" y1="18" x2="20" y2="150" />
-                {plotSeries.map((series, index) => (
-                  <polyline
-                    key={series.id}
-                    points={makePlotPolyline(index)}
-                    stroke={series.color}
-                  />
-                ))}
+                {plotSeries.map((series, index) => {
+                  const seriesPoints = plotPointsBySeries.get(series.id) ?? [];
+                  const points =
+                    seriesPoints.length > 0
+                      ? makePlotPolylineFromPoints(seriesPoints)
+                      : makePlotPolyline(index);
+                  return <polyline key={series.id} points={points} stroke={series.color} />;
+                })}
               </svg>
               <div className="plot-legend">
                 {plotSeries.map((series) => (
@@ -1296,6 +1668,33 @@ function App() {
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="preview-table-wrap">
+              <table className="preview-table">
+                <thead>
+                  <tr>
+                    <th>timestamp</th>
+                    <th>panel</th>
+                    <th>series</th>
+                    <th>signal</th>
+                    <th>value</th>
+                    <th>unit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {plotPoints.map((point, index) => (
+                    <tr key={`${point.panel_id}-${point.series_id}-${index}`}>
+                      <td>{point.timestamp_host}</td>
+                      <td>{point.panel_id}</td>
+                      <td>{point.series_id}</td>
+                      <td>{point.source_signal_id}</td>
+                      <td className="mono">{point.value.toFixed(3)}</td>
+                      <td>{point.unit}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {plotPoints.length === 0 ? <p className="empty-table">No plot points</p> : null}
             </div>
           </section>
         </section>

@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "name": "orion-main-basic-layout",
+  "description": "Basic plot layout for G474_Orion_main CAN receive parser smoke test",
+  "panels": [
+    {
+      "id": "motor",
+      "title": "Motor",
+      "series": [
+        {
+          "id": "motor0_rps",
+          "signal_id": "orion_motor0_rps",
+          "label": "Motor0 RPS",
+          "color": "#196B7A",
+          "axis": "left",
+          "scale": 1,
+          "offset": 0,
+          "unit_override": null
+        },
+        {
+          "id": "motor0_angle_rad",
+          "signal_id": "orion_motor0_angle_rad",
+          "label": "Motor0 angle",
+          "color": "#9A5A1F",
+          "axis": "right",
+          "scale": 1,
+          "offset": 0,
+          "unit_override": null
+        }
+      ]
+    },
+    {
+      "id": "power",
+      "title": "Power",
+      "series": [
+        {
+          "id": "battery_voltage",
+          "signal_id": "orion_power_battery_voltage",
+          "label": "Battery voltage",
+          "color": "#2E7D32",
+          "axis": "left",
+          "scale": 1,
+          "offset": 0,
+          "unit_override": null
+        },
+        {
+          "id": "current0",
+          "signal_id": "orion_current0",
+          "label": "Current0",
+          "color": "#7B3FA1",
+          "axis": "right",
+          "scale": 1,
+          "offset": 0,
+          "unit_override": null
+        }
+      ]
+    },
+    {
+      "id": "mouse",
+      "title": "Mouse",
+      "series": [
+        {
+          "id": "mouse_raw_x",
+          "signal_id": "orion_mouse_raw_x",
+          "label": "Mouse raw X",
+          "color": "#1565C0",
+          "axis": "left",
+          "scale": 1,
+          "offset": 0,
+          "unit_override": null
+        },
+        {
+          "id": "mouse_raw_y",
+          "signal_id": "orion_mouse_raw_y",
+          "label": "Mouse raw Y",
+          "color": "#C62828",
+          "axis": "left",
+          "scale": 1,
+          "offset": 0,
+          "unit_override": null
+        }
+      ]
+    }
+  ]
+}

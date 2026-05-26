@@ -1,0 +1,9 @@
+timestamp_host,bus,direction,id,id_format,frame_format,frame_type,dlc,data_length,flags,data_hex
+1779608000.000,CAN0,rx,0x200,standard,classic,data,8,8,,0000C03F000010C0
+1779608000.100,CAN0,rx,0x215,standard,classic,data,8,8,,0000C44100000000
+1779608000.200,CAN0,rx,0x220,standard,classic,data,8,8,,0000124200002842
+1779608000.300,CAN0,rx,0x224,standard,classic,data,8,8,,2D28260000000000
+1779608000.400,CAN0,rx,0x230,standard,classic,data,8,8,,0000504000000000
+1779608000.500,CAN0,rx,0x240,standard,classic,data,8,8,,012A000000000000
+1779608000.600,CAN0,rx,0x241,standard,classic,data,8,8,,6400CEFFD2040000
+1779608000.700,CAN0,rx,0x500,standard,classic,data,8,8,,0000A04000000000

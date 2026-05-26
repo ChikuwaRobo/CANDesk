@@ -484,11 +484,17 @@ Plotter 側は `canrush init-layout --output ...` で `.canrush-layout.json` の
 
 現段階の Plotter は GUI 表示エンジンではなく、layout を適用した plot point 生成までを core/CLI で検証する段階である。これにより GUI 実装前に parse config、plot layout、CSV 契約、endian / signed / scale / offset の扱いを unit test と CLI smoke test で固定できる。
 
+parse config の `source` には `data_type` を追加した。既定値は `unsigned-int` で、既存 config との互換性を保つ。`signed-int` は符号付き整数、`float32` は IEEE754 32-bit float を指定された endian で読む。STM32 の `uchar4_to_float()` と互換にする場合は `data_type: "float32"`、`bit_offset: 0`、`bit_length: 32`、`endian: "little"` を指定する。`examples/orion.canrush-parse.json` は `G474_Orion_main` の `parseCanCmd()` を元にした受信パース設定で、`examples/orion-sample-capture.csv` と `examples/orion.canrush-layout.json` を使って CLI だけで parse / plot の確認ができる。
+
 GUI 側には `Monitor`、`Parser`、`Plotter` の workspace tab を追加した。`Parser` tab は parse config の選択、signal 一覧、signal editor、SignalSample preview の骨組みを持つ。`Plotter` tab は plot layout の選択、series 一覧、series editor、plot preview、legend の骨組みを持つ。現段階では sample data を表示するだけで、ファイル読み込み、保存、live parser stream、実プロット描画エンジンへの接続は後続実装とする。
 
 GUI は server 分離後の運用として、まず既存の local server を優先して使う。`Start Server` 操作時に `/api/v1/status` が応答すれば GUI は server を起動せず、owner を `external` として既存 server に接続する。応答がない場合だけ GUI backend が `canrush-server --listen 127.0.0.1:49000 --server-name canrush-server-gui` を子プロセスとして起動する。
 
 GUI backend は起動した server process の状態を保持し、`running`、`starting`、`not-running`、`exited` のような process state と、`external` / `gui` の owner を GUI に返す。起動直後は status API を polling し、server process が先に終了した場合は exit code と起動後経過時間を exit reason として返す。起動後に GUI 管理 server が停止した場合も `latest_snapshot` の status refresh で検出し、`server process stopped` として表示する。
+
+server 未起動時に GUI が固まらないよう、GUI backend から server API へ行う blocking HTTP request には短い timeout を設定する。また frontend 側は server 未接続時の `latest_snapshot` polling を低頻度にし、接続後だけ 30 Hz 相当の表示更新に切り替える。これにより server 未起動状態でも GUI の操作を維持し、`Start Server` 操作へ進められる。
+
+開発中に GUI を起動する場合、`cargo run -p canrush-desktop` や `target\debug\canrush-desktop.exe` をそのまま実行すると、Tauri の dev 設定により `http://127.0.0.1:1420` の frontend dev server が必要になる。通常の開発起動は `apps/desktop` で `npm run tauri -- dev` を使う。`target\debug\canrush-desktop.exe` を単体で直接起動したい場合は、事前に `apps/desktop` で `npm run tauri -- build --debug` を実行し、frontend を埋め込んだ debug binary を生成してから起動する。
 
 ## 受信専用 GUI 構成
 
@@ -1060,3 +1066,12 @@ WeAct adapter の受信、送信、CLI、GUI が安定してから標準 slcan a
 - CAN FD の最大データレート、BRS の利用有無。
 - キャプチャには送信フレームも含めるか。
 - 定期送信の最小周期と、安全上の上限をどの程度にするか。
+## GUI Parser/Plotter フロントエンド
+Parser画面は、読み込んだパース設定名、信号数、パース済みサンプル数、選択信号のサンプル数を表示する。信号一覧には `bus / CAN ID / data_type` を出し、プレビュー表には timestamp、bus、frame、signal、value、unit、quality を表示する。
+
+Plotter画面は、読み込んだレイアウト名、系列数、パネル数、生成済みplot point数、選択系列のpoint数を表示する。プロットSVGは `build_plot_points()` の結果がある場合は実データ点からpolylineを作り、まだ点がない場合だけ見た目確認用のサンプル波形を使う。plot point一覧も表で確認できる。
+
+## GUI Parser/Plotter 連携
+Parser/Plotter ワークスペースでは、パース設定 JSON とプロットレイアウト JSON のパスを入力して読み込む。現時点ではファイル選択ダイアログではなくパス入力とし、既定値は `examples/orion.canrush-parse.json` と `examples/orion.canrush-layout.json` にしている。
+
+GUI の `Parse` / `Plot` 操作は、Tauri backend が保持している最新受信フレームを `canrush-core::parser::parse_frames()` と `canrush-core::plot::build_plot_points()` に渡す。これにより CLI の `parse` / `plot` と GUI のプレビューで、同じ設定ファイルと同じ core 実装を使う。GUI 表示用のサンプル波形は、実データがない場合の見た目確認用に限定する。
