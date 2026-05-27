@@ -285,6 +285,8 @@ npm.cmd run test:smoke
 
 ## Phase 7: Component 分割
 
+状態: 2026-05-28 完了。`App.tsx` を作成して `main.tsx` を entry point 化し、`AppHeader`、`StatusStrip`、`MonitorView`、`BusPanel`、`FrameTable`、`FrameDetail` を `components/` に抽出済み。Parser / Plotter の詳細分割は Phase 7 後続改善候補として残す。
+
 目的: JSX を画面単位に分け、表示 component を props 駆動にする。
 
 作業順:

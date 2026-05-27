@@ -95,6 +95,8 @@ GUI から Tauri command を呼ぶ処理は `apps/desktop/src/api/` に閉じ込
 
 GUI の realtime lifecycle は `apps/desktop/src/hooks/` に分ける。snapshot polling、dummy frame timer、Live Plot timer、Canvas animation loop は hook 側で管理し、画面 component は状態合成と表示に寄せる。
 
+GUI entry point の `apps/desktop/src/main.tsx` は React root 作成だけにする。画面の状態合成は `App.tsx`、再利用する表示部品は `apps/desktop/src/components/` に置く。現在は header / status / Monitor 系 component を分離済みで、Parser / Plotter の細分化は次の JSX 整理対象にする。
+
 Tauri 実ウィンドウで確認する場合:
 
 ```powershell
