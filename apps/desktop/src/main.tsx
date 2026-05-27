@@ -19,9 +19,7 @@ import {
 } from "lucide-react";
 import type {
   BusConfig,
-  LatestFrame,
   ParseConfigDto,
-  ParserSignal,
   ParsePlotPreviewDto,
   PlotLayoutDto,
   PlotPointDto,
@@ -41,152 +39,34 @@ import {
   sampleParserSignals,
   samplePlotSeries,
 } from "./fixtures/previewData";
+import { makeDummyFrames } from "./fixtures/orionDummy";
 import {
   compareFrames,
-  formatCanId,
-  formatPayloadHex,
   formatServerStartedAt,
   mapSnapshotFrame,
   mergeFramesById,
   numericValue,
   rateBarWidthPercent,
 } from "./lib/frames";
+import { mapParseConfig, mapPlotLayout, sampleSignalValue } from "./lib/parserMapping";
+import {
+  appendUniquePlotPoints,
+  appendUniqueSamples,
+  filterRecentPlotPoints,
+  maxRealtimePlotPoints,
+  maxRealtimeSamples,
+  plotVisibleWindowSeconds,
+  resetSeenPlotPointKeys,
+  resetSeenSampleKeys,
+} from "./lib/plotHistory";
 import "./styles.css";
 
-const dummyIds = [0x200, 0x215, 0x230, 0x241];
 const realtimePreviewIntervalMs = 100;
 const plotRenderFrameMs = 1000 / 30;
-const plotVisibleWindowSeconds = 10;
-const maxRealtimeSamples = 10000;
-const maxRealtimePlotPoints = 20000;
 const maxCanvasPointsPerSeries = 1600;
 const maxPreviewTableRows = 200;
 function hasTauriRuntime() {
   return Boolean(window.__TAURI_INTERNALS__);
-}
-
-function sampleSignalValue(signal: ParserSignal, index: number) {
-  const raw = 13073 + index * 257;
-  return raw * signal.scale + signal.offset;
-}
-
-function mapParseConfig(config: ParseConfigDto): ParserSignal[] {
-  return config.signals.map((signal) => ({
-    id: signal.id,
-    name: signal.name,
-    bus: signal.selector.bus ?? "ALL",
-    canId: formatCanId(`0x${signal.selector.id.toString(16)}`, "standard"),
-    dataType:
-      signal.source.data_type ?? (signal.source.signed ? "signed-int" : "unsigned-int"),
-    byteOffset: signal.source.byte_offset,
-    bitOffset: signal.source.bit_offset,
-    bitLength: signal.source.bit_length,
-    endian: signal.source.endian,
-    signed: signal.source.data_type === "signed-int" || Boolean(signal.source.signed),
-    scale: signal.conversion.scale,
-    offset: signal.conversion.offset,
-    unit: signal.conversion.unit ?? "",
-  }));
-}
-
-function mapPlotLayout(layout: PlotLayoutDto): PlotSeries[] {
-  return layout.panels.flatMap((panel) =>
-    panel.series.map((series) => ({
-      id: series.id,
-      panelId: panel.id,
-      panelTitle: panel.title,
-      signalId: series.signal_id,
-      label: series.label,
-      axis: series.axis,
-      scale: series.scale,
-      offset: series.offset,
-      unit: series.unit_override ?? "",
-      color: series.color,
-    })),
-  );
-}
-
-function signalSampleKey(sample: SignalSampleDto) {
-  return `${sample.signal_id}-${sample.source_sequence}-${sample.timestamp_host}`;
-}
-
-function plotPointKey(point: PlotPointDto) {
-  return `${point.panel_id}-${point.series_id}-${point.source_sequence}-${point.timestamp_host}`;
-}
-
-function resetSeenSampleKeys(samples: SignalSampleDto[], seen: Set<string>) {
-  seen.clear();
-  for (const sample of samples) {
-    seen.add(signalSampleKey(sample));
-  }
-}
-
-function resetSeenPlotPointKeys(points: PlotPointDto[], seen: Set<string>) {
-  seen.clear();
-  for (const point of points) {
-    seen.add(plotPointKey(point));
-  }
-}
-
-function appendUniqueSamples(
-  current: SignalSampleDto[],
-  incoming: SignalSampleDto[],
-  seen: Set<string>,
-) {
-  const unique = incoming.filter((sample) => {
-    const key = signalSampleKey(sample);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-  if (unique.length === 0) {
-    return current;
-  }
-  const next = [...current, ...unique].slice(-maxRealtimeSamples);
-  resetSeenSampleKeys(next, seen);
-  return next;
-}
-
-function appendUniquePlotPoints(
-  current: PlotPointDto[],
-  incoming: PlotPointDto[],
-  seen: Set<string>,
-) {
-  const unique = incoming.filter((point) => {
-    const key = plotPointKey(point);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-  if (unique.length === 0) {
-    return current;
-  }
-  const next = [...current, ...unique].slice(-maxRealtimePlotPoints);
-  resetSeenPlotPointKeys(next, seen);
-  return next;
-}
-
-function filterRecentPlotPoints(points: PlotPointDto[], windowSeconds: number) {
-  if (points.length === 0) {
-    return points;
-  }
-  const latestTimestamp = Math.max(
-    ...points
-      .map((point) => Number.parseFloat(point.timestamp_host))
-      .filter(Number.isFinite),
-  );
-  if (!Number.isFinite(latestTimestamp)) {
-    return points;
-  }
-  const cutoff = latestTimestamp - windowSeconds;
-  return points.filter((point) => {
-    const timestamp = Number.parseFloat(point.timestamp_host);
-    return Number.isFinite(timestamp) && timestamp >= cutoff;
-  });
 }
 
 function drawPlotCanvas(
@@ -289,57 +169,6 @@ function drawPlotCanvas(
     }
     context.stroke();
   }
-}
-
-function makeDummyFrame(bus: "CAN0" | "CAN1", id: number, index: number, tick: number): LatestFrame {
-  const idText = formatCanId(`0x${id.toString(16)}`, "standard");
-  const bytes = makeOrionDummyPayload(id, bus, tick);
-  const rateHz = ((index + 1) * (bus === "CAN0" ? 12.5 : 9.5) + (tick % 5) * 2).toFixed(1);
-  return {
-    rowKey: `${bus}-standard-classic-data-${idText}`,
-    bus,
-    id: idText,
-    idFormat: "standard",
-    frameFormat: "classic",
-    frameType: "data",
-    dlc: 8,
-    length: 8,
-    data: formatPayloadHex(bytes),
-    flags: "",
-    lastSeen: `${Math.floor(Date.now() / 1000)}.${String(Date.now() % 1000).padStart(3, "0")}`,
-    rateHz,
-    count: tick * (index + 1) * (bus === "CAN0" ? 3 : 2),
-    raw: `dummy:${bus}:${idText}:${bytes}`,
-  };
-}
-
-function makeDummyFrames(tick: number) {
-  return dummyIds.flatMap((id, index) => [
-    makeDummyFrame("CAN0", id, index, tick),
-    makeDummyFrame("CAN1", id, index, tick),
-  ]);
-}
-
-function makeOrionDummyPayload(id: number, bus: "CAN0" | "CAN1", tick: number) {
-  const busOffset = bus === "CAN1" ? 0.35 : 0;
-  const phase = tick / 10 + busOffset;
-  const buffer = new ArrayBuffer(8);
-  const view = new DataView(buffer);
-  if (id === 0x200) {
-    view.setFloat32(0, 2.5 + Math.sin(phase) * 1.5, true);
-    view.setFloat32(4, -(0.8 + Math.cos(phase) * 0.4), true);
-  } else if (id === 0x215) {
-    view.setFloat32(0, 24.0 + Math.sin(phase / 2) * 0.8, true);
-  } else if (id === 0x230) {
-    view.setFloat32(0, 3.0 + Math.cos(phase * 1.3) * 1.2, true);
-  } else if (id === 0x241) {
-    view.setInt16(0, Math.round(Math.sin(phase) * 120), true);
-    view.setInt16(2, Math.round(Math.cos(phase) * 80), true);
-    view.setUint16(4, 1000 + (tick % 300), true);
-  }
-  return Array.from(new Uint8Array(buffer), (byte) =>
-    byte.toString(16).toUpperCase().padStart(2, "0"),
-  ).join("");
 }
 
 function App() {

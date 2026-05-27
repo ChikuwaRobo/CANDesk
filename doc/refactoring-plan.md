@@ -126,6 +126,8 @@ npm.cmd run test:unit
 
 ## Phase 3: Plot / Parser 変換ロジックの抽出
 
+状態: 2026-05-28 完了。`lib/parserMapping.ts`、`lib/plotHistory.ts`、`fixtures/orionDummy.ts` に抽出し、Vitest の unit test を追加済み。
+
 目的: plot 履歴、dedup、10 秒窓、Parser / Plotter mapping を pure function にする。
 
 作業:
