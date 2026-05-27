@@ -77,6 +77,8 @@ npm.cmd run test:smoke
 
 目的: 最新 frame 表示の変換、sort、merge を unit test 可能にする。
 
+状態: 2026-05-28 完了。`lib/frames.ts` に抽出し、Vitest の unit test を追加済み。
+
 作業:
 
 1. `apps/desktop/src/lib/frames.ts` を作成する。
