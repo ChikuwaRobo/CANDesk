@@ -10,6 +10,7 @@ CANRush は、USB-CAN アダプタを PC から利用するための CAN ビュ�
 
 - [server-cli.md](./server-cli.md): server / CLI / capture CSV / frame model / API 境界。
 - [gui.md](./gui.md): Tauri GUI、Parser / Plotter、GUI 品質・headless smoke test 方針。
+- [refactoring-plan.md](./refactoring-plan.md): GUI / Tauri backend リファクタリングの具体作業手順。
 - [usb-can-adapters.md](./usb-can-adapters.md): USB-CAN adapter layer 全体方針。
 - [slcan.md](./slcan.md): 標準 slcan 仕様メモ。
 - [weact-usb2canfdv1.md](./weact-usb2canfdv1.md): WeActStudio USB2CANFDV1 固有メモ。
