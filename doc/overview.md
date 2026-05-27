@@ -91,6 +91,8 @@ npm.cmd run test:smoke
 
 GUI の pure function は `apps/desktop/src/lib/` に切り出し、Vitest の `test:unit` で固定する。現時点では frame 表示、Parser / Plotter mapping、plot 履歴 dedup / windowing、Canvas 座標計算、Orion dummy frame 生成を unit test 対象にしている。
 
+GUI から Tauri command を呼ぶ処理は `apps/desktop/src/api/` に閉じ込める。`desktopClient` は `invoke()` を担当し、`previewClient` は headless browser smoke test 用の同等データを返す。React component では `getCanRushClient()` 経由で client を使い、実ウィンドウ有無の分岐を直接持たない。
+
 Tauri 実ウィンドウで確認する場合:
 
 ```powershell

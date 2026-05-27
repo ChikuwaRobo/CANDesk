@@ -1,6 +1,5 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
   Cable,
@@ -19,26 +18,22 @@ import {
 } from "lucide-react";
 import type {
   BusConfig,
-  ParseConfigDto,
   ParsePlotPreviewDto,
-  PlotLayoutDto,
   PlotPointDto,
   PlotSeries,
   SerialPortInfo,
-  ServerInfoDto,
   SignalSampleDto,
-  SnapshotDto,
   SortMode,
   WorkspaceView,
 } from "./types";
 import {
   initialBuses,
   initialServerInfo,
-  previewPorts,
   sampleFrames,
   sampleParserSignals,
   samplePlotSeries,
 } from "./fixtures/previewData";
+import { getCanRushClient } from "./api/client";
 import { makeDummyFrames } from "./fixtures/orionDummy";
 import {
   compareFrames,
@@ -53,8 +48,6 @@ import {
   appendUniquePlotPoints,
   appendUniqueSamples,
   filterRecentPlotPoints,
-  maxRealtimePlotPoints,
-  maxRealtimeSamples,
   plotVisibleWindowSeconds,
   resetSeenPlotPointKeys,
   resetSeenSampleKeys,
@@ -65,11 +58,9 @@ import "./styles.css";
 const realtimePreviewIntervalMs = 100;
 const plotRenderFrameMs = 1000 / 30;
 const maxPreviewTableRows = 200;
-function hasTauriRuntime() {
-  return Boolean(window.__TAURI_INTERNALS__);
-}
 
 function App() {
+  const client = React.useMemo(() => getCanRushClient(), []);
   const plotCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const signalSampleKeysRef = React.useRef(new Set<string>());
   const plotPointKeysRef = React.useRef(new Set<string>());
@@ -158,14 +149,12 @@ function App() {
 
   async function refreshPorts() {
     try {
-      const listed = window.__TAURI_INTERNALS__
-        ? await invoke<SerialPortInfo[]>("list_serial_ports")
-        : previewPorts;
+      const listed = await client.listSerialPorts();
       setPorts(listed);
       setEventLog(
-        hasTauriRuntime()
-          ? `${listed.length} serial port(s) detected`
-          : "browser preview mode; using sample serial ports",
+        client.isPreview
+          ? "browser preview mode; using sample serial ports"
+          : `${listed.length} serial port(s) detected`,
       );
       setBuses((current) =>
         current.map((bus) => {
@@ -179,22 +168,8 @@ function App() {
   }
 
   async function startServer() {
-    if (!hasTauriRuntime()) {
-      setServerInfo({
-        ...initialServerInfo,
-        connected: true,
-        server_name: "canrush-server-preview",
-        protocol_version: "preview",
-        process_state: "running",
-        owner: "browser-preview",
-        message: "browser preview mode; server start is simulated",
-      });
-      setEventLog("browser preview mode; server start is simulated");
-      return;
-    }
-
     try {
-      const info = await invoke<ServerInfoDto>("start_local_server");
+      const info = await client.startLocalServer();
       setServerInfo(info);
       setEventLog(info.message);
     } catch (error) {
@@ -209,7 +184,7 @@ function App() {
   }
 
   async function connectAll() {
-    if (!hasTauriRuntime()) {
+    if (client.isPreview) {
       setConnected(true);
       setBuses((current) =>
         current.map((bus) => ({
@@ -240,14 +215,12 @@ function App() {
         if (!bus.port) {
           throw new Error(`${bus.bus} port is not selected`);
         }
-        await invoke("connect_bus", {
-          config: {
-            bus: bus.bus,
-            port: bus.port,
-            bitrate: bus.bitrate,
-            data_bitrate: bus.dataBitrate,
-            listen_only: bus.listenOnly,
-          },
+        await client.connectBus({
+          bus: bus.bus,
+          port: bus.port,
+          bitrate: bus.bitrate,
+          dataBitrate: bus.dataBitrate,
+          listenOnly: bus.listenOnly,
         });
       }
       setConnected(true);
@@ -258,9 +231,9 @@ function App() {
   }
 
   async function disconnectAll() {
-    if (hasTauriRuntime()) {
+    if (!client.isPreview) {
       try {
-        await invoke("disconnect_all");
+        await client.disconnectAll();
       } catch (error) {
         setEventLog(`disconnect failed: ${String(error)}`);
         return;
@@ -281,9 +254,9 @@ function App() {
   }
 
   async function clearView() {
-    if (hasTauriRuntime()) {
+    if (!client.isPreview) {
       try {
-        await invoke("clear_latest");
+        await client.clearLatest();
       } catch (error) {
         setEventLog(`clear failed: ${String(error)}`);
         return;
@@ -294,19 +267,8 @@ function App() {
   }
 
   async function loadParseConfig() {
-    if (!hasTauriRuntime()) {
-      const nextSignals = sampleParserSignals;
-      setParserSignals(nextSignals);
-      setSelectedSignalId(nextSignals[0]?.id ?? "");
-      setParseConfigName(parseConfigPath);
-      setEventLog("browser preview mode; parse config load is simulated");
-      return true;
-    }
-
     try {
-      const config = await invoke<ParseConfigDto>("load_parse_config", {
-        path: parseConfigPath,
-      });
+      const config = await client.loadParseConfig(parseConfigPath);
       const nextSignals = mapParseConfig(config);
       setParserSignals(nextSignals);
       setSelectedSignalId(nextSignals[0]?.id ?? "");
@@ -314,39 +276,36 @@ function App() {
       setSignalSamples([]);
       setPlotPoints([]);
       setParsePreviewStatus("config loaded");
-      setEventLog(`loaded parse config: ${nextSignals.length} signal(s)`);
-      return true;
+      setEventLog(
+        client.isPreview
+          ? "browser preview mode; parse config load is simulated"
+          : `loaded parse config: ${nextSignals.length} signal(s)`,
+      );
+      return nextSignals;
     } catch (error) {
       setEventLog(`parse config load failed: ${String(error)}`);
-      return false;
+      return null;
     }
   }
 
   async function loadPlotLayout() {
-    if (!hasTauriRuntime()) {
-      const nextSeries = samplePlotSeries;
-      setPlotSeries(nextSeries);
-      setSelectedSeriesId(nextSeries[0]?.id ?? "");
-      setPlotLayoutName(plotLayoutPath);
-      setEventLog("browser preview mode; plot layout load is simulated");
-      return true;
-    }
-
     try {
-      const layout = await invoke<PlotLayoutDto>("load_plot_layout", {
-        path: plotLayoutPath,
-      });
+      const layout = await client.loadPlotLayout(plotLayoutPath);
       const nextSeries = mapPlotLayout(layout);
       setPlotSeries(nextSeries);
       setSelectedSeriesId(nextSeries[0]?.id ?? "");
       setPlotLayoutName(layout.name || plotLayoutPath);
       setPlotPoints([]);
       setParsePreviewStatus("layout loaded");
-      setEventLog(`loaded plot layout: ${nextSeries.length} series`);
-      return true;
+      setEventLog(
+        client.isPreview
+          ? "browser preview mode; plot layout load is simulated"
+          : `loaded plot layout: ${nextSeries.length} series`,
+      );
+      return nextSeries;
     } catch (error) {
       setEventLog(`plot layout load failed: ${String(error)}`);
-      return false;
+      return null;
     }
   }
 
@@ -357,15 +316,25 @@ function App() {
       return;
     }
 
-    const parseLoaded = await loadParseConfig();
-    const layoutLoaded = await loadPlotLayout();
-    if (!parseLoaded || !layoutLoaded) {
+    const loadedSignals = await loadParseConfig();
+    const loadedSeries = await loadPlotLayout();
+    if (!loadedSignals || !loadedSeries) {
       return;
     }
     setSignalSamples([]);
     setPlotPoints([]);
     signalSampleKeysRef.current.clear();
     plotPointKeysRef.current.clear();
+    try {
+      const preview = await client.parsePlotPreviewLive({
+        parserSignals: loadedSignals,
+        plotSeries: loadedSeries,
+      });
+      applyParsePlotPreview(preview, "live", false);
+    } catch (error) {
+      setEventLog(`parse/plot preview failed: ${String(error)}`);
+      return;
+    }
     setRealtimePlot(true);
     setParsePreviewStatus("live starting");
   }
@@ -390,59 +359,20 @@ function App() {
   }
 
   async function refreshParsePlotPreview(append = false) {
-    if (!hasTauriRuntime()) {
-      const timestamp = (Date.now() / 1000).toFixed(3);
-      const sequence = Math.floor(Date.now() / realtimePreviewIntervalMs);
-      const previewSamples = parserSignals.map((signal, index) => {
-        const base = sampleSignalValue(signal, index);
-        const wave = Math.sin(sequence / 8 + index * 0.7);
-        return {
-          timestamp_host: timestamp,
-          bus: signal.bus,
-          frame_id: signal.canId,
-          signal_id: signal.id,
-          name: signal.name,
-          value: base + wave * Math.max(1, Math.abs(base) * 0.05),
-          unit: signal.unit,
-          quality: "ok",
-          source_sequence: sequence,
-        };
-      });
-      const previewPoints = plotSeries.map((series, index) => ({
-        timestamp_host: timestamp,
-        panel_id: series.panelId,
-        series_id: series.id,
-        source_signal_id: series.signalId,
-        name: series.label,
-        value: previewSamples.find((sample) => sample.signal_id === series.signalId)?.value ?? 0,
-        unit: series.unit,
-        quality: "ok",
-        source_sequence: sequence + index,
-      }));
-      if (append) {
-        setSignalSamples((current) => [...current, ...previewSamples].slice(-maxRealtimeSamples));
-        setPlotPoints((current) => [...current, ...previewPoints].slice(-maxRealtimePlotPoints));
-        setParsePreviewStatus(
-          `${previewSamples.length} sample(s), ${previewPoints.length} point(s) preview`,
-        );
-        setEventLog("browser preview mode; parse and plot preview is simulated");
-        return;
-      }
-      applyParsePlotPreview({ samples: previewSamples, points: previewPoints }, "preview", append);
-      setEventLog("browser preview mode; parse and plot preview is simulated");
-      return;
-    }
-
     try {
       const preview = append
-        ? await invoke<ParsePlotPreviewDto>("parse_plot_preview_live")
-        : await invoke<ParsePlotPreviewDto>("parse_plot_preview", {
+        ? await client.parsePlotPreviewLive({ parserSignals, plotSeries })
+        : await client.parsePlotPreview({
             parseConfigPath,
             plotLayoutPath,
+            parserSignals,
+            plotSeries,
           });
-      applyParsePlotPreview(preview, append ? "live" : "", append);
+      applyParsePlotPreview(preview, append ? "live" : client.isPreview ? "preview" : "", append);
       setEventLog(
-        `parsed ${preview.samples.length} sample(s), built ${preview.points.length} plot point(s)`,
+        client.isPreview
+          ? "browser preview mode; parse and plot preview is simulated"
+          : `parsed ${preview.samples.length} sample(s), built ${preview.points.length} plot point(s)`,
       );
     } catch (error) {
       setEventLog(`parse/plot preview failed: ${String(error)}`);
@@ -450,43 +380,13 @@ function App() {
   }
 
   async function refreshCaptureFilePreview() {
-    if (!hasTauriRuntime()) {
-      const previewSamples = parserSignals.map((signal, index) => ({
-        timestamp_host: `${index * 0.5}`,
-        bus: signal.bus,
-        frame_id: signal.canId,
-        signal_id: signal.id,
-        name: signal.name,
-        value: sampleSignalValue(signal, index),
-        unit: signal.unit,
-        quality: "preview",
-        source_sequence: index + 1,
-      }));
-      const previewPoints = plotSeries.map((series, index) => ({
-        timestamp_host: `${index * 0.5}`,
-        panel_id: series.panelId,
-        series_id: series.id,
-        source_signal_id: series.signalId,
-        name: series.label,
-        value: previewSamples.find((sample) => sample.signal_id === series.signalId)?.value ?? 0,
-        unit: series.unit,
-        quality: "preview",
-        source_sequence: index + 1,
-      }));
-      setSignalSamples(previewSamples);
-      setPlotPoints(previewPoints);
-      resetSeenSampleKeys(previewSamples, signalSampleKeysRef.current);
-      resetSeenPlotPointKeys(previewPoints, plotPointKeysRef.current);
-      setParsePreviewStatus(`capture preview: ${previewSamples.length} sample(s)`);
-      setEventLog("browser preview mode; capture file preview is simulated");
-      return;
-    }
-
     try {
-      const preview = await invoke<ParsePlotPreviewDto>("parse_plot_capture_file", {
+      const preview = await client.parsePlotCaptureFile({
         parseConfigPath,
         plotLayoutPath,
         capturePath: capturePreviewPath,
+        parserSignals,
+        plotSeries,
       });
       setSignalSamples(preview.samples);
       setPlotPoints(preview.points);
@@ -496,7 +396,9 @@ function App() {
         `${preview.samples.length} sample(s), ${preview.points.length} point(s) from CSV`,
       );
       setEventLog(
-        `parsed capture CSV: ${preview.samples.length} sample(s), ${preview.points.length} plot point(s)`,
+        client.isPreview
+          ? "browser preview mode; capture file preview is simulated"
+          : `parsed capture CSV: ${preview.samples.length} sample(s), ${preview.points.length} plot point(s)`,
       );
     } catch (error) {
       setEventLog(`capture preview failed: ${String(error)}`);
@@ -514,7 +416,7 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    if (!hasTauriRuntime() || debugDummy) {
+    if (client.isPreview || debugDummy) {
       return undefined;
     }
 
@@ -526,7 +428,7 @@ function App() {
       }
       inFlight = true;
       try {
-        const snapshot = await invoke<SnapshotDto>("latest_snapshot");
+        const snapshot = await client.latestSnapshot();
         setServerInfo(snapshot.server);
         setConnected(snapshot.buses.some((entry) => entry.status === "connected"));
         setBuses((current) =>
@@ -562,7 +464,7 @@ function App() {
     }, intervalMs);
 
     return () => window.clearInterval(timer);
-  }, [paused, debugDummy, serverInfo.connected]);
+  }, [client, paused, debugDummy, serverInfo.connected]);
 
   React.useEffect(() => {
     if (!debugDummy) {

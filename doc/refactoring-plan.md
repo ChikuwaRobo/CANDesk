@@ -205,6 +205,8 @@ npm.cmd run test:smoke
 
 ## Phase 5: Tauri / preview client の分離
 
+状態: 2026-05-28 完了。`api/desktopClient.ts`、`api/previewClient.ts`、`api/client.ts` に分離し、`main.tsx` から直接の `invoke()` と runtime 判定を削除済み。
+
 目的: React component から `invoke()` と `hasTauriRuntime()` 分岐を減らす。
 
 作業:
