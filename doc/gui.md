@@ -87,6 +87,112 @@ React 側では、`useEffect` を外部システムとの同期に限定する�
 
 `useEffect` を追加する場合は、cleanup、依存配列、React Strict Mode の再 mount で二重接続や二重 timer が起きないことを確認する。
 
+## リファクタリング方針
+
+リファクタリングの目的は、見た目や機能を大きく変えることではなく、変更時に壊れる範囲を小さくし、自動テストで基本動作を守れる構造にすることである。現状では frontend の `main.tsx` が 2000 行を超え、Tauri backend の `src-tauri/src/main.rs` も 1000 行を超えているため、どちらも段階的に責務を分ける。
+
+### 基本ルール
+
+- 振る舞い変更と構造変更を同じ差分に混ぜない。リファクタリング PR / commit は原則として既存機能の見た目と操作を維持する。
+- 1 回の変更では 1 つの境界だけを切る。例: pure function 抽出だけ、component 分割だけ、Tauri client 分離だけ。
+- 各段階で `npm.cmd run build` と `npm.cmd run test:smoke` を通す。core 契約や Tauri backend に触れる場合は `cargo test -p canrush-core` または該当 Rust test も通す。
+- 先に test 可能な pure function を切り出し、unit test を付ける。component や hook の分割は、その後に行う。
+- browser preview / dummy data / sample CSV は refactor 中も維持する。実 CAN 機がないと確認できない構造にはしない。
+- `useEffect`、timer、WebSocket、Canvas、Tauri IPC は副作用境界として明示し、cleanup のない抽出をしない。
+
+### Frontend の目標構造
+
+`apps/desktop/src` は次のような構成へ寄せる。
+
+```text
+src/
+  main.tsx                  React entry point だけを持つ
+  App.tsx                   画面全体の composition と route 相当の切替
+  types.ts                  DTO と view model 型
+  api/
+    desktopClient.ts        Tauri invoke の wrapper
+    previewClient.ts        browser preview 用 client
+  fixtures/
+    previewData.ts          sample frame / port / parser / plotter data
+    orionDummy.ts           Orion dummy payload 生成
+  lib/
+    frames.ts               CAN ID format、filter、sort、merge、rate helper
+    plotHistory.ts          sample / point dedup、10 秒窓、履歴上限
+    plotCanvas.ts           Canvas 描画
+    parserMapping.ts        ParseConfigDto / PlotLayoutDto の view model 変換
+  hooks/
+    useSnapshotPolling.ts   latest_snapshot polling
+    useDummyFrames.ts       dummy data timer
+    useRealtimePlot.ts      live plot timer
+    usePlotCanvas.ts        requestAnimationFrame 描画
+  components/
+    MonitorView.tsx
+    ParserView.tsx
+    PlotterView.tsx
+    BusPanel.tsx
+    FrameTable.tsx
+    FrameDetail.tsx
+    StatusStrip.tsx
+```
+
+この分割では、`api/*` と `hooks/*` だけが副作用を持つ。`lib/*` と `fixtures/*` は unit test 可能な純粋処理にする。`components/*` は props を受け取って表示することに寄せる。
+
+### Frontend の実装順序
+
+1. `types.ts` と `fixtures/*` を切り出す。振る舞いは変えない。
+2. `lib/frames.ts` に `formatCanId`、`mapSnapshotFrame`、filter / sort、merge buses、rate helper を移す。Vitest を追加し、代表ケースを固定する。
+3. `lib/plotHistory.ts` と `lib/plotCanvas.ts` に plot point dedup、10 秒窓、Canvas 描画を移す。10 秒窓と履歴上限を unit test で固定する。
+4. `api/desktopClient.ts` と `api/previewClient.ts` を作り、React component から `invoke()` を直接呼ばない形にする。
+5. `hooks/*` に polling、dummy frame、live plot、Canvas draw loop を移す。cleanup と多重起動防止をテストまたは smoke で確認する。
+6. `components/*` へ Monitor / Parser / Plotter を分割する。分割後も Playwright smoke の locator を極力変えない。
+7. 最後に `App.tsx` を composition だけに近づけ、`main.tsx` は React root 作成だけにする。
+
+### Tauri backend の目標構造
+
+`apps/desktop/src-tauri/src/main.rs` は、Tauri command、server process 管理、HTTP client、WebSocket stream、parse / plot preview、DTO 変換が同居している。次の構成へ分ける。
+
+```text
+src-tauri/src/
+  main.rs              tauri::Builder と command 登録
+  commands.rs          #[tauri::command] 関数
+  state.rs             ReceiverState / ReceiverInner / runtime state
+  server_process.rs    canrush-server 起動、既存 server 検出、終了監視
+  server_client.rs     HTTP get/post、ServerEndpoint、response parse
+  stream.rs            WebSocket worker、FrameEventDto -> CanFrame 変換
+  parse_plot.rs        parse / plot preview、config cache
+  path.rs              設定 / CSV path 解決
+  dto.rs               GUI 向け DTO
+```
+
+Tauri command は薄い wrapper にし、実処理は通常関数として test できる module に寄せる。WebSocket worker と process lifecycle は副作用が強いため、まず DTO 変換、path 解決、parse / plot preview のような純粋または準純粋な箇所から分ける。
+
+### Tauri backend の実装順序
+
+1. `dto.rs` と `path.rs` を切り出す。既存 test を維持する。
+2. `parse_plot.rs` を切り出し、既存の parse / plot preview test を移す。
+3. `server_client.rs` を切り出す。HTTP timeout、error message、endpoint 解決を 1 箇所に集約する。
+4. `server_process.rs` を切り出す。GUI owned / external server の区別、起動待ち、終了検出を test 可能にする。
+5. `stream.rs` を切り出す。`FrameEventDto -> CanFrame` 変換と WebSocket worker を分け、変換部分を unit test する。
+6. 最後に `commands.rs` を薄い command layer にし、`main.rs` は builder と state 初期化だけにする。
+
+### 優先順位
+
+最初に frontend の pure function 抽出を行う。理由は、現在の GUI バグの多くが表示 state、dummy data、plot 履歴、timer の絡みで再現しやすく、headless smoke と unit test の効果がすぐ出るためである。
+
+次に Tauri client / preview client を分ける。これにより、browser preview と Tauri runtime の差を明示でき、component 側が `hasTauriRuntime()` 分岐を持たずに済む。
+
+Rust backend の大きな分割はその後に行う。backend は既に Rust test があるため、先に test を移しながら module 分割する。
+
+### 中止条件
+
+次の状態になった場合は、その段階の分割を止めて小さく戻す。
+
+- `npm.cmd run test:smoke` が、対象外の画面で失敗する。
+- component 分割のために Playwright locator を大きく変える必要が出た。
+- 抽出先 module が元ファイルの state を広く参照し、props や引数が不自然に増えた。
+- `useEffect` の依存配列が説明できない形になった。
+- Tauri command の error message が変わり、CLI / GUI の切り分けが難しくなった。
+
 ## Headless-first デバッグ方針
 
 GUI の基本動作確認は、人間の PC 操作を妨げない headless browser test を第一候補にする。
