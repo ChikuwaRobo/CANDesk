@@ -59,116 +59,14 @@ import {
   resetSeenPlotPointKeys,
   resetSeenSampleKeys,
 } from "./lib/plotHistory";
+import { drawPlotCanvas } from "./lib/plotCanvas";
 import "./styles.css";
 
 const realtimePreviewIntervalMs = 100;
 const plotRenderFrameMs = 1000 / 30;
-const maxCanvasPointsPerSeries = 1600;
 const maxPreviewTableRows = 200;
 function hasTauriRuntime() {
   return Boolean(window.__TAURI_INTERNALS__);
-}
-
-function drawPlotCanvas(
-  canvas: HTMLCanvasElement,
-  seriesList: PlotSeries[],
-  points: PlotPointDto[],
-) {
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.floor(rect.width));
-  const height = Math.max(1, Math.floor(rect.height));
-  const pixelWidth = Math.floor(width * dpr);
-  const pixelHeight = Math.floor(height * dpr);
-  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-    canvas.width = pixelWidth;
-    canvas.height = pixelHeight;
-  }
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return;
-  }
-
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.clearRect(0, 0, width, height);
-  context.fillStyle = "#f4f7f8";
-  context.fillRect(0, 0, width, height);
-
-  const left = 34;
-  const right = 12;
-  const top = 14;
-  const bottom = 24;
-  const chartWidth = Math.max(1, width - left - right);
-  const chartHeight = Math.max(1, height - top - bottom);
-
-  context.strokeStyle = "#d4dee1";
-  context.lineWidth = 1;
-  context.beginPath();
-  for (let index = 0; index <= 4; index += 1) {
-    const y = top + (chartHeight * index) / 4;
-    context.moveTo(left, y);
-    context.lineTo(left + chartWidth, y);
-  }
-  context.stroke();
-
-  context.strokeStyle = "#9ca9ae";
-  context.beginPath();
-  context.moveTo(left, top);
-  context.lineTo(left, top + chartHeight);
-  context.lineTo(left + chartWidth, top + chartHeight);
-  context.stroke();
-
-  const visiblePoints = filterRecentPlotPoints(points, plotVisibleWindowSeconds);
-  const pointsBySeries = new Map<string, PlotPointDto[]>();
-  for (const point of visiblePoints) {
-    const timestamp = Number.parseFloat(point.timestamp_host);
-    if (!Number.isFinite(timestamp) || !Number.isFinite(point.value)) {
-      continue;
-    }
-    const seriesPoints = pointsBySeries.get(point.series_id) ?? [];
-    seriesPoints.push(point);
-    pointsBySeries.set(point.series_id, seriesPoints);
-  }
-  const drawablePoints = Array.from(pointsBySeries.values()).flat();
-  if (drawablePoints.length === 0) {
-    return;
-  }
-
-  const maxTime = Math.max(
-    ...drawablePoints.map((point) => Number.parseFloat(point.timestamp_host)),
-  );
-  const minTime = maxTime - plotVisibleWindowSeconds;
-  const minValue = Math.min(...drawablePoints.map((point) => point.value));
-  const maxValue = Math.max(...drawablePoints.map((point) => point.value));
-  const timeRange = Math.max(0.001, maxTime - minTime);
-  const valueRange = Math.max(0.001, maxValue - minValue);
-
-  context.lineWidth = 2;
-  context.lineJoin = "round";
-  context.lineCap = "round";
-  for (const series of seriesList) {
-    const seriesPoints = pointsBySeries.get(series.id) ?? [];
-    if (seriesPoints.length === 0) {
-      continue;
-    }
-    const stride = Math.max(1, Math.ceil(seriesPoints.length / maxCanvasPointsPerSeries));
-    context.strokeStyle = series.color;
-    context.beginPath();
-    let moved = false;
-    for (let index = 0; index < seriesPoints.length; index += stride) {
-      const point = seriesPoints[index];
-      const timestamp = Number.parseFloat(point.timestamp_host);
-      const x = left + ((timestamp - minTime) / timeRange) * chartWidth;
-      const y = top + chartHeight - ((point.value - minValue) / valueRange) * chartHeight;
-      if (!moved) {
-        context.moveTo(x, y);
-        moved = true;
-      } else {
-        context.lineTo(x, y);
-      }
-    }
-    context.stroke();
-  }
 }
 
 function App() {

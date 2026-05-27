@@ -89,7 +89,7 @@ npm.cmd run test:smoke
 
 `test:smoke` は実ウィンドウを開かず、headless Chromium で browser preview を操作する。人間の PC 操作を妨げない基本動作確認として、Monitor / Parser / Plotter の最小操作をここで検出する。
 
-GUI の pure function は `apps/desktop/src/lib/` に切り出し、Vitest の `test:unit` で固定する。現時点では frame 表示、Parser / Plotter mapping、plot 履歴 dedup / windowing、Orion dummy frame 生成を unit test 対象にしている。
+GUI の pure function は `apps/desktop/src/lib/` に切り出し、Vitest の `test:unit` で固定する。現時点では frame 表示、Parser / Plotter mapping、plot 履歴 dedup / windowing、Canvas 座標計算、Orion dummy frame 生成を unit test 対象にしている。
 
 Tauri 実ウィンドウで確認する場合:
 

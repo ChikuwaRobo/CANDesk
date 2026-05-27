@@ -172,6 +172,8 @@ npm.cmd run test:smoke
 
 ## Phase 4: Canvas 描画の抽出
 
+状態: 2026-05-28 完了。`lib/plotCanvas.ts` に Canvas 描画と座標計算を抽出し、座標計算・系列 grouping・間引きの unit test を追加済み。
+
 目的: Canvas 描画処理を React component から分離し、Plotter の描画責務を明確にする。
 
 作業:
