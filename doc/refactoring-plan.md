@@ -44,6 +44,8 @@ cargo test -p canrush-core
 
 目的: `main.tsx` から安全に移せる型定義と sample data を分離する。
 
+状態: 2026-05-28 完了。`types.ts` と `fixtures/previewData.ts` に抽出済み。
+
 作業:
 
 1. `apps/desktop/src/types.ts` を作成する。
