@@ -234,7 +234,7 @@ type ParsePlotPreviewDto = {
   points: PlotPointDto[];
 };
 
-const dummyIds = [0x103, 0x110, 0x180, 0x201, 0x2a0, 0x305, 0x3f2, 0x420];
+const dummyIds = [0x200, 0x215, 0x230, 0x241];
 const realtimePreviewIntervalMs = 100;
 const plotRenderFrameMs = 1000 / 30;
 const plotVisibleWindowSeconds = 10;
@@ -334,61 +334,115 @@ const sampleFrames: LatestFrame[] = [
 
 const sampleParserSignals: ParserSignal[] = [
   {
-    id: "can0_100_u16",
-    name: "example_value",
-    bus: "CAN0",
-    canId: "0x100",
-    dataType: "unsigned-int",
+    id: "orion_motor0_rps",
+    name: "motor0_rps",
+    bus: "ALL",
+    canId: "0x200",
+    dataType: "float32",
     byteOffset: 0,
     bitOffset: 0,
-    bitLength: 16,
+    bitLength: 32,
     endian: "little",
     signed: false,
     scale: 1,
     offset: 0,
-    unit: "raw",
+    unit: "rps",
   },
   {
-    id: "can1_110_temp",
-    name: "module_temp",
-    bus: "CAN1",
-    canId: "0x110",
-    dataType: "signed-int",
-    byteOffset: 2,
+    id: "orion_motor0_angle_rad",
+    name: "motor0_angle_rad",
+    bus: "ALL",
+    canId: "0x200",
+    dataType: "float32",
+    byteOffset: 4,
     bitOffset: 0,
-    bitLength: 12,
+    bitLength: 32,
     endian: "little",
-    signed: true,
-    scale: 0.1,
-    offset: -40,
-    unit: "degC",
+    signed: false,
+    scale: -1,
+    offset: 0,
+    unit: "rad",
+  },
+  {
+    id: "orion_power_battery_voltage",
+    name: "power_battery_voltage",
+    bus: "ALL",
+    canId: "0x215",
+    dataType: "float32",
+    byteOffset: 0,
+    bitOffset: 0,
+    bitLength: 32,
+    endian: "little",
+    signed: false,
+    scale: 1,
+    offset: 0,
+    unit: "V",
+  },
+  {
+    id: "orion_current0",
+    name: "current0",
+    bus: "ALL",
+    canId: "0x230",
+    dataType: "float32",
+    byteOffset: 0,
+    bitOffset: 0,
+    bitLength: 32,
+    endian: "little",
+    signed: false,
+    scale: 1,
+    offset: 0,
+    unit: "A",
   },
 ];
 
 const samplePlotSeries: PlotSeries[] = [
   {
-    id: "example_value",
-    panelId: "main",
-    panelTitle: "Main",
-    signalId: "can0_100_u16",
-    label: "Example value",
+    id: "motor0_rps",
+    panelId: "motor",
+    panelTitle: "Motor",
+    signalId: "orion_motor0_rps",
+    label: "Motor0 RPS",
     axis: "left",
     scale: 1,
     offset: 0,
-    unit: "raw",
+    unit: "rps",
     color: "#196B7A",
   },
   {
-    id: "module_temp",
-    panelId: "main",
-    panelTitle: "Main",
-    signalId: "can1_110_temp",
-    label: "Module temp",
+    id: "motor0_angle_rad",
+    panelId: "motor",
+    panelTitle: "Motor",
+    signalId: "orion_motor0_angle_rad",
+    label: "Motor0 angle",
     axis: "right",
     scale: 1,
     offset: 0,
-    unit: "degC",
+    unit: "rad",
     color: "#9A5A1F",
+  },
+  {
+    id: "battery_voltage",
+    panelId: "power",
+    panelTitle: "Power",
+    signalId: "orion_power_battery_voltage",
+    label: "Battery voltage",
+    axis: "left",
+    scale: 1,
+    offset: 0,
+    unit: "V",
+    color: "#2E7D32",
+  },
+  {
+    id: "current0",
+    panelId: "power",
+    panelTitle: "Power",
+    signalId: "orion_current0",
+    label: "Current0",
+    axis: "right",
+    scale: 1,
+    offset: 0,
+    unit: "A",
+    color: "#7B3FA1",
   },
 ];
 
@@ -746,12 +800,7 @@ function drawPlotCanvas(
 
 function makeDummyFrame(bus: "CAN0" | "CAN1", id: number, index: number, tick: number): LatestFrame {
   const idText = formatCanId(`0x${id.toString(16)}`, "standard");
-  const bytes = Array.from({ length: 8 }, (_, byteIndex) =>
-    ((id + tick + byteIndex * 17 + (bus === "CAN1" ? 31 : 0)) & 0xff)
-      .toString(16)
-      .toUpperCase()
-      .padStart(2, "0"),
-  );
+  const bytes = makeOrionDummyPayload(id, bus, tick);
   const rateHz = ((index + 1) * (bus === "CAN0" ? 12.5 : 9.5) + (tick % 5) * 2).toFixed(1);
   return {
     rowKey: `${bus}-standard-classic-data-${idText}`,
@@ -762,12 +811,12 @@ function makeDummyFrame(bus: "CAN0" | "CAN1", id: number, index: number, tick: n
     frameType: "data",
     dlc: 8,
     length: 8,
-    data: bytes.join(" "),
+    data: formatPayloadHex(bytes),
     flags: "",
     lastSeen: `${Math.floor(Date.now() / 1000)}.${String(Date.now() % 1000).padStart(3, "0")}`,
     rateHz,
     count: tick * (index + 1) * (bus === "CAN0" ? 3 : 2),
-    raw: `dummy:${bus}:${idText}:${bytes.join("")}`,
+    raw: `dummy:${bus}:${idText}:${bytes}`,
   };
 }
 
@@ -776,6 +825,28 @@ function makeDummyFrames(tick: number) {
     makeDummyFrame("CAN0", id, index, tick),
     makeDummyFrame("CAN1", id, index, tick),
   ]);
+}
+
+function makeOrionDummyPayload(id: number, bus: "CAN0" | "CAN1", tick: number) {
+  const busOffset = bus === "CAN1" ? 0.35 : 0;
+  const phase = tick / 10 + busOffset;
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  if (id === 0x200) {
+    view.setFloat32(0, 2.5 + Math.sin(phase) * 1.5, true);
+    view.setFloat32(4, -(0.8 + Math.cos(phase) * 0.4), true);
+  } else if (id === 0x215) {
+    view.setFloat32(0, 24.0 + Math.sin(phase / 2) * 0.8, true);
+  } else if (id === 0x230) {
+    view.setFloat32(0, 3.0 + Math.cos(phase * 1.3) * 1.2, true);
+  } else if (id === 0x241) {
+    view.setInt16(0, Math.round(Math.sin(phase) * 120), true);
+    view.setInt16(2, Math.round(Math.cos(phase) * 80), true);
+    view.setUint16(4, 1000 + (tick % 300), true);
+  }
+  return Array.from(new Uint8Array(buffer), (byte) =>
+    byte.toString(16).toUpperCase().padStart(2, "0"),
+  ).join("");
 }
 
 function App() {
@@ -1100,19 +1171,25 @@ function App() {
 
   async function refreshParsePlotPreview(append = false) {
     if (!hasTauriRuntime()) {
-      const previewSamples = parserSignals.map((signal, index) => ({
-        timestamp_host: `${index * 0.5}`,
-        bus: signal.bus,
-        frame_id: signal.canId,
-        signal_id: signal.id,
-        name: signal.name,
-        value: sampleSignalValue(signal, index),
-        unit: signal.unit,
-        quality: "ok",
-        source_sequence: index + 1,
-      }));
+      const timestamp = (Date.now() / 1000).toFixed(3);
+      const sequence = Math.floor(Date.now() / realtimePreviewIntervalMs);
+      const previewSamples = parserSignals.map((signal, index) => {
+        const base = sampleSignalValue(signal, index);
+        const wave = Math.sin(sequence / 8 + index * 0.7);
+        return {
+          timestamp_host: timestamp,
+          bus: signal.bus,
+          frame_id: signal.canId,
+          signal_id: signal.id,
+          name: signal.name,
+          value: base + wave * Math.max(1, Math.abs(base) * 0.05),
+          unit: signal.unit,
+          quality: "ok",
+          source_sequence: sequence,
+        };
+      });
       const previewPoints = plotSeries.map((series, index) => ({
-        timestamp_host: `${index * 0.5}`,
+        timestamp_host: timestamp,
         panel_id: series.panelId,
         series_id: series.id,
         source_signal_id: series.signalId,
@@ -1120,8 +1197,17 @@ function App() {
         value: previewSamples.find((sample) => sample.signal_id === series.signalId)?.value ?? 0,
         unit: series.unit,
         quality: "ok",
-        source_sequence: index + 1,
+        source_sequence: sequence + index,
       }));
+      if (append) {
+        setSignalSamples((current) => [...current, ...previewSamples].slice(-maxRealtimeSamples));
+        setPlotPoints((current) => [...current, ...previewPoints].slice(-maxRealtimePlotPoints));
+        setParsePreviewStatus(
+          `${previewSamples.length} sample(s), ${previewPoints.length} point(s) preview`,
+        );
+        setEventLog("browser preview mode; parse and plot preview is simulated");
+        return;
+      }
       applyParsePlotPreview({ samples: previewSamples, points: previewPoints }, "preview", append);
       setEventLog("browser preview mode; parse and plot preview is simulated");
       return;
