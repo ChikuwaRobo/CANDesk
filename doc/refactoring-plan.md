@@ -250,6 +250,8 @@ npm.cmd run test:smoke
 
 ## Phase 6: realtime hook の抽出
 
+状態: 2026-05-28 完了。`hooks/useSnapshotPolling.ts`、`hooks/useDummyFrames.ts`、`hooks/useRealtimePlot.ts`、`hooks/usePlotCanvas.ts` に timer / polling / animation frame lifecycle を抽出済み。
+
 目的: timer と animation frame の lifecycle を component から分ける。
 
 作業:

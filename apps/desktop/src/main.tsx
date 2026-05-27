@@ -34,11 +34,9 @@ import {
   samplePlotSeries,
 } from "./fixtures/previewData";
 import { getCanRushClient } from "./api/client";
-import { makeDummyFrames } from "./fixtures/orionDummy";
 import {
   compareFrames,
   formatServerStartedAt,
-  mapSnapshotFrame,
   mergeFramesById,
   numericValue,
   rateBarWidthPercent,
@@ -52,7 +50,10 @@ import {
   resetSeenPlotPointKeys,
   resetSeenSampleKeys,
 } from "./lib/plotHistory";
-import { drawPlotCanvas } from "./lib/plotCanvas";
+import { useDummyFrames } from "./hooks/useDummyFrames";
+import { usePlotCanvas } from "./hooks/usePlotCanvas";
+import { useRealtimePlot } from "./hooks/useRealtimePlot";
+import { useSnapshotPolling } from "./hooks/useSnapshotPolling";
 import "./styles.css";
 
 const realtimePreviewIntervalMs = 100;
@@ -415,128 +416,45 @@ function App() {
     void refreshPorts();
   }, []);
 
-  React.useEffect(() => {
-    if (client.isPreview || debugDummy) {
-      return undefined;
-    }
+  useSnapshotPolling({
+    client,
+    enabled: !client.isPreview && !debugDummy,
+    paused,
+    serverConnected: serverInfo.connected,
+    setServerInfo,
+    setConnected,
+    setBuses,
+    setFrames,
+    setEventLog,
+  });
 
-    let inFlight = false;
-    const intervalMs = serverInfo.connected ? 33 : 1000;
-    const timer = window.setInterval(async () => {
-      if (inFlight) {
-        return;
-      }
-      inFlight = true;
-      try {
-        const snapshot = await client.latestSnapshot();
-        setServerInfo(snapshot.server);
-        setConnected(snapshot.buses.some((entry) => entry.status === "connected"));
-        setBuses((current) =>
-          current.map((bus) => {
-            const status = snapshot.buses.find((entry) => entry.bus === bus.bus);
-            if (!status) {
-              return bus;
-            }
-            return {
-              ...bus,
-              status: status.status,
-              frames: status.frames,
-              errors: status.errors,
-              rateHz: status.rate_hz,
-              utilizationPercent: status.utilization_percent,
-              saturatedLast1sMs: status.saturated_last_1s_ms,
-              saturatedWorst1sMs: status.saturated_worst_1s_ms,
-            };
-          }),
-        );
-        if (!paused) {
-          const nextFrames = snapshot.frames.map(mapSnapshotFrame);
-          setFrames(nextFrames);
-        }
-        if (snapshot.event_log) {
-          setEventLog(snapshot.event_log);
-        }
-      } catch (error) {
-        setEventLog(`snapshot failed: ${String(error)}`);
-      } finally {
-        inFlight = false;
-      }
-    }, intervalMs);
+  useDummyFrames({
+    enabled: debugDummy,
+    paused,
+    setConnected,
+    setBuses,
+    setFrames,
+    setEventLog,
+  });
 
-    return () => window.clearInterval(timer);
-  }, [client, paused, debugDummy, serverInfo.connected]);
+  const refreshRealtimePlot = React.useCallback(
+    () => refreshParsePlotPreview(true),
+    [parseConfigPath, plotLayoutPath, parserSignals, plotSeries],
+  );
 
-  React.useEffect(() => {
-    if (!debugDummy) {
-      return undefined;
-    }
+  useRealtimePlot({
+    enabled: realtimePlot,
+    intervalMs: realtimePreviewIntervalMs,
+    refresh: refreshRealtimePlot,
+  });
 
-    let tick = 1;
-    const timer = window.setInterval(() => {
-      const nextFrames = makeDummyFrames(tick);
-      setConnected(true);
-      setBuses((current) =>
-        current.map((bus, index) => ({
-          ...bus,
-          status: "connected",
-          frames: tick * (index === 0 ? 390 : 315),
-          errors: 0,
-          rateHz: index === 0 ? "3900.0" : "3150.0",
-          utilizationPercent: index === 0 ? "58.4" : "47.1",
-          saturatedLast1sMs: index === 0 ? "0.0" : "0.0",
-          saturatedWorst1sMs: index === 0 ? "8.2" : "3.6",
-        })),
-      );
-      if (!paused) {
-        setFrames(nextFrames);
-      }
-      setEventLog("dummy data mode; adapter input is bypassed");
-      tick += 1;
-    }, 100);
-
-    return () => window.clearInterval(timer);
-  }, [debugDummy, paused]);
-
-  React.useEffect(() => {
-    if (!realtimePlot) {
-      return undefined;
-    }
-
-    let inFlight = false;
-    const timer = window.setInterval(() => {
-      if (inFlight) {
-        return;
-      }
-      inFlight = true;
-      void refreshParsePlotPreview(true).finally(() => {
-        inFlight = false;
-      });
-    }, realtimePreviewIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [realtimePlot, parseConfigPath, plotLayoutPath, parserSignals, plotSeries]);
-
-  React.useEffect(() => {
-    if (workspaceView !== "plotter") {
-      return undefined;
-    }
-
-    let animationFrame = 0;
-    let lastDrawAt = 0;
-    const draw = (timestamp: number) => {
-      if (timestamp - lastDrawAt >= plotRenderFrameMs) {
-        const canvas = plotCanvasRef.current;
-        if (canvas) {
-          drawPlotCanvas(canvas, plotSeriesRef.current, plotPointsRef.current);
-        }
-        lastDrawAt = timestamp;
-      }
-      animationFrame = window.requestAnimationFrame(draw);
-    };
-    animationFrame = window.requestAnimationFrame(draw);
-
-    return () => window.cancelAnimationFrame(animationFrame);
-  }, [workspaceView]);
+  usePlotCanvas({
+    enabled: workspaceView === "plotter",
+    canvasRef: plotCanvasRef,
+    seriesRef: plotSeriesRef,
+    pointsRef: plotPointsRef,
+    frameMs: plotRenderFrameMs,
+  });
 
   return (
     <main className="app-shell">
