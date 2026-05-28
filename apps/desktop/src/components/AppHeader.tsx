@@ -5,7 +5,6 @@ import {
   LineChart,
   Plug,
   RefreshCw,
-  Server,
   Unplug,
 } from "lucide-react";
 import { formatServerStartedAt } from "../lib/frames";
@@ -15,7 +14,6 @@ type AppHeaderProps = {
   serverInfo: ServerInfoDto;
   workspaceView: WorkspaceView;
   onWorkspaceViewChange: (view: WorkspaceView) => void;
-  onStartServer: () => void;
   onRefreshPorts: () => void;
   onConnectAll: () => void;
   onDisconnectAll: () => void;
@@ -25,7 +23,6 @@ export function AppHeader({
   serverInfo,
   workspaceView,
   onWorkspaceViewChange,
-  onStartServer,
   onRefreshPorts,
   onConnectAll,
   onDisconnectAll,
@@ -64,10 +61,6 @@ export function AppHeader({
             </button>
           ))}
         </div>
-        <button type="button" onClick={onStartServer} title="ローカルサーバー起動">
-          <Server size={16} />
-          Start Server
-        </button>
         <button type="button" onClick={onRefreshPorts} title="ポート再読み込み">
           <RefreshCw size={16} />
           Refresh

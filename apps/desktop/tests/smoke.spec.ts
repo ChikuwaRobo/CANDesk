@@ -4,10 +4,8 @@ test("monitor preview shows dummy frames without Tauri", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "CANRush" })).toBeVisible();
-  await expect(page.getByLabel("local server status")).toContainText("not-running");
-
-  await page.getByRole("button", { name: "Start Server" }).click();
   await expect(page.getByLabel("local server status")).toContainText("canrush-server-preview");
+  await expect(page.getByRole("button", { name: "Start Server" })).toHaveCount(0);
 
   await page.getByLabel("Dummy data").check();
   await expect(page.getByLabel("latest frames")).toContainText("0x200");
@@ -17,7 +15,6 @@ test("monitor preview shows dummy frames without Tauri", async ({ page }) => {
 test("monitor toolbar can start connect clear and disconnect headlessly", async ({ page }) => {
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Start Server" }).click();
   await expect(page.getByLabel("local server status")).toContainText("canrush-server-preview");
 
   await page.getByRole("button", { name: "Connect", exact: true }).click();

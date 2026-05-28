@@ -400,6 +400,7 @@ export default function App() {
 
   React.useEffect(() => {
     void refreshPorts();
+    void startServer();
   }, []);
 
   useSnapshotPolling({
@@ -448,7 +449,6 @@ export default function App() {
         serverInfo={serverInfo}
         workspaceView={workspaceView}
         onWorkspaceViewChange={setWorkspaceView}
-        onStartServer={startServer}
         onRefreshPorts={refreshPorts}
         onConnectAll={connectAll}
         onDisconnectAll={disconnectAll}

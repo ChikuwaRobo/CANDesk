@@ -60,6 +60,7 @@ examples/
 
 - 実 CAN デバイスを開く責務は、通常 `canrush-server` 側に寄せる。
 - GUI と CLI は同じ server stream を購読する client として扱う。
+- GUI 起動時に local server が見つからない場合は自動起動する。手動の Start Server 操作は置かず、利用者は Refresh / Connect から開始する。
 - CLI 単独で adapter を開く Standalone mode は、開発時 smoke test、緊急 capture、adapter bring-up 用として残す。
 - 複数バスは `CAN0`、`CAN1` のような論理名で扱う。実用上は 2 バス、最大 4 バス程度を初期想定にする。
 - 受信フレームは共通 `CanFrame` に正規化し、CSV capture、GUI 表示、parser、plotter で同じ表現を使う。

@@ -397,7 +397,7 @@ npm.cmd run test:smoke
 
 ## Phase 10: 整理後の仕上げ
 
-状態: 2026-05-28 完了。Monitor toolbar の Start / Connect / Clear / Disconnect、Plotter CSV preview と Clear Plot の headless smoke test を追加済み。実機接続は COM3 / COM85 の WeActStudio 系ポートで listen-only の最小受信確認済み。
+状態: 2026-05-28 完了。GUI 起動時の local server 自動起動、Monitor toolbar の Connect / Clear / Disconnect、Plotter CSV preview と Clear Plot の headless smoke test を追加済み。実機接続は COM3 / COM85 の WeActStudio 系ポートで listen-only の最小受信確認済み。
 
 目的: 分割後の構造を保守しやすい状態にする。
 
