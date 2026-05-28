@@ -2,9 +2,7 @@ use canrush_core::api::{BusStatusDto as ServerBusStatusDto, ConnectBusRequest};
 use canrush_core::server::LatestFrameState;
 use serde_json::Value;
 
-use crate::dto::{
-    ConnectBusConfig, LatestFrameDto, SerialPortDto, ServerInfoDto, SnapshotDto,
-};
+use crate::dto::{ConnectBusConfig, LatestFrameDto, SerialPortDto, ServerInfoDto, SnapshotDto};
 use crate::server_client::post_json;
 use crate::state::ReceiverState;
 use crate::stream::ensure_stream_worker;
@@ -103,7 +101,9 @@ pub(crate) fn start_local_server(
 }
 
 #[tauri::command]
-pub(crate) fn latest_snapshot(state: tauri::State<'_, ReceiverState>) -> Result<SnapshotDto, String> {
+pub(crate) fn latest_snapshot(
+    state: tauri::State<'_, ReceiverState>,
+) -> Result<SnapshotDto, String> {
     ensure_stream_worker(&state.inner)?;
 
     let server = refresh_server_info(&state.inner)?;

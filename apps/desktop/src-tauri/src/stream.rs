@@ -187,3 +187,59 @@ fn update_stream_log(shared: &Arc<Mutex<ReceiverInner>>, message: String) {
         inner.event_log = message;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_event_maps_to_can_frame() {
+        let frame = frame_from_event(FrameEventDto {
+            event: "frame".to_string(),
+            sequence: 42,
+            timestamp_host_unix_ns: "1000000001".to_string(),
+            bus: "CAN0".to_string(),
+            direction: "rx".to_string(),
+            id: "0x200".to_string(),
+            id_format: "standard".to_string(),
+            frame_format: "fd".to_string(),
+            frame_type: "data".to_string(),
+            dlc: 9,
+            data_length: 12,
+            flags: "brs;esi".to_string(),
+            data_hex: "000102030405060708090A0B".to_string(),
+        })
+        .expect("frame event should decode");
+
+        assert_eq!(frame.bus, "CAN0");
+        assert_eq!(frame.id, 0x200);
+        assert_eq!(frame.id_format, IdFormat::Standard);
+        assert_eq!(frame.frame_format, FrameFormat::Fd);
+        assert_eq!(frame.data_length, 12);
+        assert!(frame.bitrate_switch);
+        assert!(frame.error_state_indicator);
+        assert_eq!(frame.data, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    }
+
+    #[test]
+    fn frame_event_rejects_bad_payload_hex() {
+        let error = frame_from_event(FrameEventDto {
+            event: "frame".to_string(),
+            sequence: 1,
+            timestamp_host_unix_ns: "0".to_string(),
+            bus: "CAN0".to_string(),
+            direction: "rx".to_string(),
+            id: "0x200".to_string(),
+            id_format: "standard".to_string(),
+            frame_format: "classic".to_string(),
+            frame_type: "data".to_string(),
+            dlc: 8,
+            data_length: 8,
+            flags: "".to_string(),
+            data_hex: "ABC".to_string(),
+        })
+        .expect_err("odd-length payload should fail");
+
+        assert!(error.contains("hex payload length"));
+    }
+}

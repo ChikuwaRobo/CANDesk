@@ -14,6 +14,22 @@ test("monitor preview shows dummy frames without Tauri", async ({ page }) => {
   await expect(page.getByLabel("latest frames")).toContainText("CAN0");
 });
 
+test("monitor toolbar can start connect clear and disconnect headlessly", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Start Server" }).click();
+  await expect(page.getByLabel("local server status")).toContainText("canrush-server-preview");
+
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByText("receiving")).toBeVisible();
+
+  await page.getByRole("button", { name: "Clear" }).click();
+  await expect(page.getByLabel("latest frames")).toContainText("No frames");
+
+  await page.getByRole("button", { name: "Disconnect" }).click();
+  await expect(page.getByText("display live")).toBeVisible();
+});
+
 test("parser preview can load and parse sample signals headlessly", async ({ page }) => {
   await page.goto("/");
 

@@ -45,7 +45,10 @@ pub(crate) fn map_bus_status(status: ServerBusStatusDto) -> BusStatusDto {
     }
 }
 
-pub(crate) fn set_event_log(shared: &Arc<Mutex<ReceiverInner>>, message: String) -> Result<(), String> {
+pub(crate) fn set_event_log(
+    shared: &Arc<Mutex<ReceiverInner>>,
+    message: String,
+) -> Result<(), String> {
     let mut inner = shared.lock().map_err(|error| error.to_string())?;
     inner.event_log = message;
     Ok(())

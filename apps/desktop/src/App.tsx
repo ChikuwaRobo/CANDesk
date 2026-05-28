@@ -1,5 +1,4 @@
 import React from "react";
-import { Activity, CirclePause, FileJson, LineChart, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import type {
   BusConfig,
   ParsePlotPreviewDto,
@@ -20,13 +19,15 @@ import {
 import { getCanRushClient } from "./api/client";
 import { AppHeader } from "./components/AppHeader";
 import { MonitorView } from "./components/MonitorView";
+import { ParserView } from "./components/ParserView";
+import { PlotterView } from "./components/PlotterView";
 import { StatusStrip } from "./components/StatusStrip";
 import {
   compareFrames,
   mergeFramesById,
   numericValue,
 } from "./lib/frames";
-import { mapParseConfig, mapPlotLayout, sampleSignalValue } from "./lib/parserMapping";
+import { mapParseConfig, mapPlotLayout } from "./lib/parserMapping";
 import {
   appendUniquePlotPoints,
   appendUniqueSamples,
@@ -480,412 +481,56 @@ export default function App() {
       ) : null}
 
       {workspaceView === "parser" ? (
-        <section className="parser-workspace" aria-label="parser workspace">
-          <aside className="workspace-side-panel">
-            <div className="panel-heading">
-              <FileJson size={18} />
-              <h2>Parse Config</h2>
-            </div>
-            <div className="config-summary">
-              <span>{parseConfigName}</span>
-              <strong>{parserSignals.length} signals</strong>
-            </div>
-            <div className="config-metrics">
-              <div>
-                <span>Parsed</span>
-                <strong>{signalSamples.length}</strong>
-              </div>
-              <div>
-                <span>Status</span>
-                <strong>{parsePreviewStatus}</strong>
-              </div>
-            </div>
-            <label className="path-input">
-              Config path
-              <input
-                value={parseConfigPath}
-                onChange={(event) => setParseConfigPath(event.target.value)}
-              />
-            </label>
-            <label className="path-input">
-              Capture CSV
-              <input
-                value={capturePreviewPath}
-                onChange={(event) => setCapturePreviewPath(event.target.value)}
-              />
-            </label>
-            <div className="stacked-actions">
-              <button type="button" title="パース設定JSONを読み込み" onClick={loadParseConfig}>
-                <FileJson size={16} />
-                Load
-              </button>
-              <button
-                type="button"
-                title="現在の受信データをパース"
-                onClick={() => refreshParsePlotPreview()}
-              >
-                <RefreshCw size={16} />
-                Parse
-              </button>
-              <button
-                type="button"
-                title="Capture CSVをパースしてプロット"
-                onClick={refreshCaptureFilePreview}
-              >
-                <LineChart size={16} />
-                CSV Plot
-              </button>
-            </div>
-            <div className="signal-list">
-              {parserSignals.map((signal) => (
-                <button
-                  type="button"
-                  key={signal.id}
-                  className={selectedSignalId === signal.id ? "selected" : ""}
-                  onClick={() => setSelectedSignalId(signal.id)}
-                >
-                  <span>{signal.name}</span>
-                  <strong>
-                    {signal.bus} {signal.canId} / {signal.dataType}
-                  </strong>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <section className="workspace-main-panel">
-            <div className="panel-heading">
-              <SlidersHorizontal size={18} />
-              <h2>Signal Editor</h2>
-            </div>
-            <div className="workspace-summary">
-              <div>
-                <span>Selected samples</span>
-                <strong>{selectedSignalSamples.length}</strong>
-              </div>
-              <div>
-                <span>Source</span>
-                <strong>
-                  {selectedSignal.bus} {selectedSignal.canId}
-                </strong>
-              </div>
-              <div>
-                <span>Type</span>
-                <strong>{selectedSignal.dataType}</strong>
-              </div>
-            </div>
-            <div className="editor-grid">
-              <label>
-                Signal ID
-                <input value={selectedSignal.id} readOnly />
-              </label>
-              <label>
-                Name
-                <input value={selectedSignal.name} readOnly />
-              </label>
-              <label>
-                Bus
-                <select value={selectedSignal.bus} disabled>
-                  <option>{selectedSignal.bus}</option>
-                </select>
-              </label>
-              <label>
-                CAN ID
-                <input value={selectedSignal.canId} readOnly />
-              </label>
-              <label>
-                Type
-                <input value={selectedSignal.dataType} readOnly />
-              </label>
-              <label>
-                Byte
-                <input value={selectedSignal.byteOffset} readOnly />
-              </label>
-              <label>
-                Bit
-                <input value={selectedSignal.bitOffset} readOnly />
-              </label>
-              <label>
-                Length
-                <input value={selectedSignal.bitLength} readOnly />
-              </label>
-              <label>
-                Endian
-                <select value={selectedSignal.endian} disabled>
-                  <option value="little">little</option>
-                  <option value="big">big</option>
-                </select>
-              </label>
-              <label className="checkbox-line editor-checkbox">
-                <input type="checkbox" checked={selectedSignal.signed} readOnly />
-                Signed
-              </label>
-              <label>
-                Scale
-                <input value={selectedSignal.scale} readOnly />
-              </label>
-              <label>
-                Offset
-                <input value={selectedSignal.offset} readOnly />
-              </label>
-              <label>
-                Unit
-                <input value={selectedSignal.unit} readOnly />
-              </label>
-            </div>
-
-            <div className="preview-table-wrap">
-              <table className="preview-table">
-                <thead>
-                  <tr>
-                    <th>timestamp</th>
-                    <th>bus</th>
-                    <th>frame</th>
-                    <th>signal</th>
-                    <th>value</th>
-                    <th>unit</th>
-                    <th>quality</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(signalSamples.length > 0
-                    ? signalSamples
-                    : parserSignals.map((signal, index) => ({
-                        timestamp_host: `+${(index * 0.5).toFixed(3)}s`,
-                        bus: signal.bus,
-                        frame_id: signal.canId,
-                        signal_id: signal.id,
-                        value: sampleSignalValue(signal, index),
-                        unit: signal.unit,
-                        quality: "preview",
-                      }))
-                  ).map((sample, index) => (
-                    <tr key={`${sample.signal_id}-${index}`}>
-                      <td>{sample.timestamp_host}</td>
-                      <td>{sample.bus}</td>
-                      <td className="mono">{sample.frame_id}</td>
-                      <td>{sample.signal_id}</td>
-                      <td className="mono">{sample.value.toFixed(3)}</td>
-                      <td>{sample.unit}</td>
-                      <td>{sample.quality}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </section>
+        <ParserView
+          parseConfigName={parseConfigName}
+          parseConfigPath={parseConfigPath}
+          capturePreviewPath={capturePreviewPath}
+          parserSignals={parserSignals}
+          selectedSignal={selectedSignal}
+          selectedSignalId={selectedSignalId}
+          selectedSignalSamples={selectedSignalSamples}
+          signalSamples={signalSamples}
+          parsePreviewStatus={parsePreviewStatus}
+          onParseConfigPathChange={setParseConfigPath}
+          onCapturePreviewPathChange={setCapturePreviewPath}
+          onLoadParseConfig={loadParseConfig}
+          onRefreshParsePlotPreview={() => refreshParsePlotPreview()}
+          onRefreshCaptureFilePreview={refreshCaptureFilePreview}
+          onSelectedSignalChange={setSelectedSignalId}
+        />
       ) : null}
 
       {workspaceView === "plotter" ? (
-        <section className="plotter-workspace" aria-label="plotter workspace">
-          <aside className="workspace-side-panel">
-            <div className="panel-heading">
-              <LineChart size={18} />
-              <h2>Plot Layout</h2>
-            </div>
-            <div className="config-summary">
-              <span>{plotLayoutName}</span>
-              <strong>{plotSeries.length} series</strong>
-            </div>
-            <div className="config-metrics">
-              <div>
-                <span>Points</span>
-                <strong>{visiblePlotPoints.length}</strong>
-              </div>
-              <div>
-                <span>Live</span>
-                <strong>{realtimePlot ? "running" : "stopped"}</strong>
-              </div>
-            </div>
-            <label className="path-input">
-              Layout path
-              <input
-                value={plotLayoutPath}
-                onChange={(event) => setPlotLayoutPath(event.target.value)}
-              />
-            </label>
-            <label className="path-input">
-              Capture CSV
-              <input
-                value={capturePreviewPath}
-                onChange={(event) => setCapturePreviewPath(event.target.value)}
-              />
-            </label>
-            <div className="stacked-actions">
-              <button type="button" title="プロットレイアウトJSONを読み込み" onClick={loadPlotLayout}>
-                <FileJson size={16} />
-                Load
-              </button>
-              <button
-                type="button"
-                title="現在の受信データからプロットを生成"
-                onClick={() => refreshParsePlotPreview()}
-              >
-                <RefreshCw size={16} />
-                Plot
-              </button>
-              <button
-                type="button"
-                title="Capture CSVをパースしてプロット"
-                onClick={refreshCaptureFilePreview}
-              >
-                <LineChart size={16} />
-                CSV Plot
-              </button>
-              <button
-                type="button"
-                title="リアルタイムプロット更新"
-                onClick={toggleRealtimePlot}
-              >
-                {realtimePlot ? <CirclePause size={16} /> : <Activity size={16} />}
-                {realtimePlot ? "Stop" : "Live"}
-              </button>
-            </div>
-            <button
-              type="button"
-              className="wide-action"
-              title="プロット履歴をクリア"
-              onClick={() => {
-                setSignalSamples([]);
-                setPlotPoints([]);
-                signalSampleKeysRef.current.clear();
-                plotPointKeysRef.current.clear();
-                setParsePreviewStatus("cleared");
-              }}
-            >
-              <Square size={16} />
-              Clear Plot
-            </button>
-            <div className="signal-list">
-              {plotSeries.map((series) => (
-                <button
-                  type="button"
-                  key={series.id}
-                  className={selectedSeriesId === series.id ? "selected" : ""}
-                  onClick={() => setSelectedSeriesId(series.id)}
-                >
-                  <span>{series.label}</span>
-                  <strong>
-                    {series.panelId} / {series.signalId}
-                  </strong>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <section className="workspace-main-panel">
-            <div className="panel-heading">
-              <SlidersHorizontal size={18} />
-              <h2>Series Editor</h2>
-            </div>
-            <div className="workspace-summary">
-              <div>
-                <span>Selected points</span>
-                <strong>{selectedSeriesPoints.length}</strong>
-              </div>
-              <div>
-                <span>Panel</span>
-                <strong>{selectedSeries.panelTitle}</strong>
-              </div>
-              <div>
-                <span>Signal</span>
-                <strong>{selectedSeries.signalId}</strong>
-              </div>
-            </div>
-            <div className="editor-grid plot-editor-grid">
-              <label>
-                Series ID
-                <input value={selectedSeries.id} readOnly />
-              </label>
-              <label>
-                Panel
-                <input value={selectedSeries.panelTitle} readOnly />
-              </label>
-              <label>
-                Source signal
-                <input value={selectedSeries.signalId} readOnly />
-              </label>
-              <label>
-                Label
-                <input value={selectedSeries.label} readOnly />
-              </label>
-              <label>
-                Axis
-                <select value={selectedSeries.axis} disabled>
-                  <option value="left">left</option>
-                  <option value="right">right</option>
-                </select>
-              </label>
-              <label>
-                Scale
-                <input value={selectedSeries.scale} readOnly />
-              </label>
-              <label>
-                Offset
-                <input value={selectedSeries.offset} readOnly />
-              </label>
-              <label>
-                Unit override
-                <input value={selectedSeries.unit} readOnly />
-              </label>
-              <label>
-                Color
-                <input value={selectedSeries.color} readOnly />
-              </label>
-            </div>
-
-            <div className="plot-preview">
-              <div className="plot-preview-header">
-                <strong>{selectedPanelTitle}</strong>
-                <span>
-                  last {plotVisibleWindowSeconds}s / {visiblePlotPoints.length} point(s)
-                </span>
-              </div>
-              <canvas ref={plotCanvasRef} role="img" aria-label="plot preview" />
-              <div className="plot-legend">
-                {plotSeries.map((series) => (
-                  <button
-                    type="button"
-                    key={series.id}
-                    className={selectedSeriesId === series.id ? "selected" : ""}
-                    onClick={() => setSelectedSeriesId(series.id)}
-                  >
-                    <span style={{ background: series.color }} />
-                    {series.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="preview-table-wrap">
-              <table className="preview-table">
-                <thead>
-                  <tr>
-                    <th>timestamp</th>
-                    <th>panel</th>
-                    <th>series</th>
-                    <th>signal</th>
-                    <th>value</th>
-                    <th>unit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {plotPointRows.map((point, index) => (
-                    <tr key={`${point.panel_id}-${point.series_id}-${index}`}>
-                      <td>{point.timestamp_host}</td>
-                      <td>{point.panel_id}</td>
-                      <td>{point.series_id}</td>
-                      <td>{point.source_signal_id}</td>
-                      <td className="mono">{point.value.toFixed(3)}</td>
-                      <td>{point.unit}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {plotPoints.length === 0 ? <p className="empty-table">No plot points</p> : null}
-            </div>
-          </section>
-        </section>
+        <PlotterView
+          plotLayoutName={plotLayoutName}
+          plotLayoutPath={plotLayoutPath}
+          capturePreviewPath={capturePreviewPath}
+          plotSeries={plotSeries}
+          selectedSeries={selectedSeries}
+          selectedSeriesId={selectedSeriesId}
+          selectedSeriesPoints={selectedSeriesPoints}
+          selectedPanelTitle={selectedPanelTitle}
+          visiblePlotPoints={visiblePlotPoints}
+          plotPointRows={plotPointRows}
+          plotPoints={plotPoints}
+          realtimePlot={realtimePlot}
+          plotVisibleWindowSeconds={plotVisibleWindowSeconds}
+          plotCanvasRef={plotCanvasRef}
+          onPlotLayoutPathChange={setPlotLayoutPath}
+          onCapturePreviewPathChange={setCapturePreviewPath}
+          onLoadPlotLayout={loadPlotLayout}
+          onRefreshParsePlotPreview={() => refreshParsePlotPreview()}
+          onRefreshCaptureFilePreview={refreshCaptureFilePreview}
+          onToggleRealtimePlot={toggleRealtimePlot}
+          onClearPlot={() => {
+            setSignalSamples([]);
+            setPlotPoints([]);
+            signalSampleKeysRef.current.clear();
+            plotPointKeysRef.current.clear();
+            setParsePreviewStatus("cleared");
+          }}
+          onSelectedSeriesChange={setSelectedSeriesId}
+        />
       ) : null}
 
       <StatusStrip eventLog={eventLog} paused={paused} connected={connected} />

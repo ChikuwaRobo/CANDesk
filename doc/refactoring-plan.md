@@ -285,7 +285,7 @@ npm.cmd run test:smoke
 
 ## Phase 7: Component 分割
 
-状態: 2026-05-28 完了。`App.tsx` を作成して `main.tsx` を entry point 化し、`AppHeader`、`StatusStrip`、`MonitorView`、`BusPanel`、`FrameTable`、`FrameDetail` を `components/` に抽出済み。Parser / Plotter の詳細分割は Phase 7 後続改善候補として残す。
+状態: 2026-05-28 完了。`App.tsx` を作成して `main.tsx` を entry point 化し、`AppHeader`、`StatusStrip`、`MonitorView`、`BusPanel`、`FrameTable`、`FrameDetail`、`ParserView`、`PlotterView` を `components/` に抽出済み。
 
 目的: JSX を画面単位に分け、表示 component を props 駆動にする。
 
@@ -397,7 +397,7 @@ npm.cmd run test:smoke
 
 ## Phase 10: 整理後の仕上げ
 
-状態: 2026-05-28 完了。Plotter CSV preview と Clear Plot の headless smoke test を追加済み。実機接続は COM3 / COM85 の WeActStudio 系ポートで listen-only の最小受信確認済み。
+状態: 2026-05-28 完了。Monitor toolbar の Start / Connect / Clear / Disconnect、Plotter CSV preview と Clear Plot の headless smoke test を追加済み。実機接続は COM3 / COM85 の WeActStudio 系ポートで listen-only の最小受信確認済み。
 
 目的: 分割後の構造を保守しやすい状態にする。
 

@@ -95,7 +95,7 @@ GUI から Tauri command を呼ぶ処理は `apps/desktop/src/api/` に閉じ込
 
 GUI の realtime lifecycle は `apps/desktop/src/hooks/` に分ける。snapshot polling、dummy frame timer、Live Plot timer、Canvas animation loop は hook 側で管理し、画面 component は状態合成と表示に寄せる。
 
-GUI entry point の `apps/desktop/src/main.tsx` は React root 作成だけにする。画面の状態合成は `App.tsx`、再利用する表示部品は `apps/desktop/src/components/` に置く。現在は header / status / Monitor 系 component を分離済みで、Parser / Plotter の細分化は次の JSX 整理対象にする。
+GUI entry point の `apps/desktop/src/main.tsx` は React root 作成だけにする。画面の状態合成は `App.tsx`、再利用する表示部品は `apps/desktop/src/components/` に置く。header / status / Monitor / Parser / Plotter の主要 component は分離済み。
 
 Tauri backend は `apps/desktop/src-tauri/src/` で module 分割する。GUI DTO は `dto.rs`、JSON path 解決は `path.rs`、Parser / Plotter preview は `parse_plot.rs`、server HTTP client は `server_client.rs`、server process 管理は `server_process.rs`、WebSocket stream worker は `stream.rs`、共有状態は `state.rs`、Tauri command は `commands.rs` に置く。`main.rs` は Tauri builder と command 登録を中心に保つ。
 
