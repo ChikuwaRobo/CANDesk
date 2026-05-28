@@ -97,6 +97,10 @@ GUI の realtime lifecycle は `apps/desktop/src/hooks/` に分ける。snapshot
 
 GUI entry point の `apps/desktop/src/main.tsx` は React root 作成だけにする。画面の状態合成は `App.tsx`、再利用する表示部品は `apps/desktop/src/components/` に置く。現在は header / status / Monitor 系 component を分離済みで、Parser / Plotter の細分化は次の JSX 整理対象にする。
 
+Tauri backend は `apps/desktop/src-tauri/src/` で module 分割する。GUI DTO は `dto.rs`、JSON path 解決は `path.rs`、Parser / Plotter preview は `parse_plot.rs`、server HTTP client は `server_client.rs`、server process 管理は `server_process.rs`、WebSocket stream worker は `stream.rs`、共有状態は `state.rs`、Tauri command は `commands.rs` に置く。`main.rs` は Tauri builder と command 登録を中心に保つ。
+
+2026-05-28 時点の実機最小確認では、WeActStudio 系として `COM3` と `COM85` が見えており、`canrush check --adapter weact --listen-only` で各 1 frame の受信に成功している。
+
 Tauri 実ウィンドウで確認する場合:
 
 ```powershell

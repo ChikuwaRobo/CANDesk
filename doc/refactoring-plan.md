@@ -323,6 +323,8 @@ npm.cmd run test:smoke
 
 ## Phase 8: Tauri backend DTO / path / parse_plot の分割
 
+状態: 2026-05-28 完了。`dto.rs`、`path.rs`、`parse_plot.rs` に分離し、parse / plot preview test も `parse_plot` module 側へ移動済み。
+
 目的: Rust backend のうち副作用が少ない部分を module 化する。
 
 作業:
@@ -355,6 +357,8 @@ npm.cmd run test:smoke
 - `main.rs` の command 処理が薄くなり始めている。
 
 ## Phase 9: Tauri backend server client / process / stream の分割
+
+状態: 2026-05-28 完了。`server_client.rs`、`server_process.rs`、`stream.rs`、`state.rs`、`commands.rs` に分割済み。`main.rs` は builder、state 初期化、command 登録、薄い共有 helper 中心に整理済み。
 
 目的: Tauri backend の副作用境界を module 化する。
 
@@ -392,6 +396,8 @@ npm.cmd run test:smoke
 - Tauri command の外部的な command 名と payload が変わっていない。
 
 ## Phase 10: 整理後の仕上げ
+
+状態: 2026-05-28 完了。Plotter CSV preview と Clear Plot の headless smoke test を追加済み。実機接続は COM3 / COM85 の WeActStudio 系ポートで listen-only の最小受信確認済み。
 
 目的: 分割後の構造を保守しやすい状態にする。
 

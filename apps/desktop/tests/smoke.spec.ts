@@ -40,3 +40,17 @@ test("plotter live preview draws points in headless browser mode", async ({ page
   await expect(page.getByLabel("plotter workspace")).toContainText("running");
   await expect(page.getByText(/last 10s \/ [1-9]\d* point\(s\)/)).toBeVisible();
 });
+
+test("plotter csv preview can be cleared headlessly", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Plotter" }).click();
+  await expect(page.getByLabel("plotter workspace")).toBeVisible();
+
+  await page.getByRole("button", { name: "CSV Plot" }).click();
+  await expect(page.getByText(/last 10s \/ [1-9]\d* point\(s\)/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Clear Plot" }).click();
+  await expect(page.getByText("last 10s / 0 point(s)")).toBeVisible();
+  await expect(page.getByText("No plot points")).toBeVisible();
+});

@@ -1,0 +1,241 @@
+use std::sync::{Arc, Mutex};
+
+use canrush_core::parser::{parse_capture_csv_file, parse_frame, ParseConfig};
+use canrush_core::plot::{build_plot_points, PlotLayout};
+
+use crate::dto::ParsePlotPreviewDto;
+use crate::path::{read_json_file, resolve_existing_path};
+use crate::{ReceiverInner, ReceiverState};
+
+#[tauri::command]
+pub(crate) fn load_parse_config(
+    state: tauri::State<'_, ReceiverState>,
+    path: String,
+) -> Result<ParseConfig, String> {
+    let config = read_json_file::<ParseConfig>(&path)?;
+    config.validate().map_err(|error| error.to_string())?;
+    let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+    inner.parse_config = Some(config.clone());
+    Ok(config)
+}
+
+#[tauri::command]
+pub(crate) fn load_plot_layout(
+    state: tauri::State<'_, ReceiverState>,
+    path: String,
+) -> Result<PlotLayout, String> {
+    let layout = read_json_file::<PlotLayout>(&path)?;
+    layout.validate().map_err(|error| error.to_string())?;
+    let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
+    inner.plot_layout = Some(layout.clone());
+    Ok(layout)
+}
+
+#[tauri::command]
+pub(crate) fn parse_plot_preview(
+    state: tauri::State<'_, ReceiverState>,
+    parse_config_path: String,
+    plot_layout_path: String,
+) -> Result<ParsePlotPreviewDto, String> {
+    parse_plot_preview_for_state(&state.inner, &parse_config_path, &plot_layout_path)
+}
+
+#[tauri::command]
+pub(crate) fn parse_plot_preview_live(
+    state: tauri::State<'_, ReceiverState>,
+) -> Result<ParsePlotPreviewDto, String> {
+    parse_plot_preview_live_for_state(&state.inner)
+}
+
+#[tauri::command]
+pub(crate) fn parse_plot_capture_file(
+    parse_config_path: String,
+    plot_layout_path: String,
+    capture_path: String,
+) -> Result<ParsePlotPreviewDto, String> {
+    parse_plot_capture_file_from_paths(&parse_config_path, &plot_layout_path, &capture_path)
+}
+
+pub(crate) fn parse_plot_capture_file_from_paths(
+    parse_config_path: &str,
+    plot_layout_path: &str,
+    capture_path: &str,
+) -> Result<ParsePlotPreviewDto, String> {
+    let config = read_json_file::<ParseConfig>(parse_config_path)?;
+    config.validate().map_err(|error| error.to_string())?;
+    let layout = read_json_file::<PlotLayout>(plot_layout_path)?;
+    layout.validate().map_err(|error| error.to_string())?;
+    let capture_path = resolve_existing_path(capture_path)?;
+    let samples = parse_capture_csv_file(&capture_path, &config).map_err(|error| {
+        format!(
+            "failed to parse capture CSV {}: {error}",
+            capture_path.display()
+        )
+    })?;
+    let points = build_plot_points(&layout, &samples);
+    Ok(ParsePlotPreviewDto { samples, points })
+}
+
+pub(crate) fn parse_plot_preview_for_state(
+    shared: &Arc<Mutex<ReceiverInner>>,
+    parse_config_path: &str,
+    plot_layout_path: &str,
+) -> Result<ParsePlotPreviewDto, String> {
+    let config = read_json_file::<ParseConfig>(parse_config_path)?;
+    config.validate().map_err(|error| error.to_string())?;
+    let layout = read_json_file::<PlotLayout>(plot_layout_path)?;
+    layout.validate().map_err(|error| error.to_string())?;
+    parse_plot_preview_from_config_for_state(shared, &config, &layout)
+}
+
+pub(crate) fn parse_plot_preview_live_for_state(
+    shared: &Arc<Mutex<ReceiverInner>>,
+) -> Result<ParsePlotPreviewDto, String> {
+    let (config, layout) = {
+        let inner = shared.lock().map_err(|error| error.to_string())?;
+        let config = inner
+            .parse_config
+            .clone()
+            .ok_or_else(|| "parse config is not loaded".to_string())?;
+        let layout = inner
+            .plot_layout
+            .clone()
+            .ok_or_else(|| "plot layout is not loaded".to_string())?;
+        (config, layout)
+    };
+    parse_plot_preview_from_config_for_state(shared, &config, &layout)
+}
+
+fn parse_plot_preview_from_config_for_state(
+    shared: &Arc<Mutex<ReceiverInner>>,
+    config: &ParseConfig,
+    layout: &PlotLayout,
+) -> Result<ParsePlotPreviewDto, String> {
+    let frames = {
+        let inner = shared.lock().map_err(|error| error.to_string())?;
+        inner
+            .latest
+            .values()
+            .map(|latest| {
+                let frame = latest.frame.clone();
+                let sequence = latest.receive_count;
+                (frame, sequence)
+            })
+            .collect::<Vec<_>>()
+    };
+    let samples = frames
+        .iter()
+        .flat_map(|(frame, sequence)| parse_frame(config, frame, *sequence))
+        .collect::<Vec<_>>();
+    let points = build_plot_points(layout, &samples);
+    Ok(ParsePlotPreviewDto { samples, points })
+}
+
+#[cfg(test)]
+#[allow(clippy::panic)]
+mod tests {
+    use canrush_core::model::{CanFrame, FrameFormat, FrameType, IdFormat};
+
+    use super::*;
+    use crate::ReceiverState;
+
+    #[test]
+    fn parse_plot_preview_uses_loaded_config_and_latest_frames() {
+        let state = state_with_orion_frame();
+
+        let preview = match parse_plot_preview_for_state(
+            &state.inner,
+            "examples/orion.canrush-parse.json",
+            "examples/orion.canrush-layout.json",
+        ) {
+            Ok(preview) => preview,
+            Err(error) => panic!("failed to build parse/plot preview: {error}"),
+        };
+
+        assert_eq!(preview.samples.len(), 2);
+        assert_eq!(preview.points.len(), 2);
+        assert_eq!(preview.samples[0].signal_id, "orion_motor0_rps");
+        assert_eq!(preview.samples[0].value, 1.5);
+        assert_eq!(preview.samples[1].signal_id, "orion_motor0_angle_rad");
+        assert_eq!(preview.samples[1].value, 2.25);
+    }
+
+    #[test]
+    fn parse_plot_preview_live_uses_cached_config() {
+        let state = state_with_orion_frame();
+        {
+            let mut inner = match state.inner.lock() {
+                Ok(inner) => inner,
+                Err(error) => panic!("failed to lock receiver state: {error}"),
+            };
+            inner.parse_config = Some(
+                match read_json_file::<ParseConfig>("examples/orion.canrush-parse.json") {
+                    Ok(config) => config,
+                    Err(error) => panic!("failed to load parse config: {error}"),
+                },
+            );
+            inner.plot_layout = Some(
+                match read_json_file::<PlotLayout>("examples/orion.canrush-layout.json") {
+                    Ok(layout) => layout,
+                    Err(error) => panic!("failed to load plot layout: {error}"),
+                },
+            );
+        }
+
+        let preview = match parse_plot_preview_live_for_state(&state.inner) {
+            Ok(preview) => preview,
+            Err(error) => panic!("failed to build live preview: {error}"),
+        };
+
+        assert_eq!(preview.samples.len(), 2);
+        assert_eq!(preview.points.len(), 2);
+    }
+
+    #[test]
+    fn parse_plot_capture_file_uses_loaded_config_and_sample_capture() {
+        let preview = match parse_plot_capture_file_from_paths(
+            "examples/orion.canrush-parse.json",
+            "examples/orion.canrush-layout.json",
+            "examples/orion-sample-capture.csv",
+        ) {
+            Ok(preview) => preview,
+            Err(error) => panic!("failed to parse sample capture: {error}"),
+        };
+
+        assert_eq!(preview.samples.len(), 12);
+        assert_eq!(preview.points.len(), 6);
+        assert!(preview
+            .samples
+            .iter()
+            .any(|sample| sample.signal_id == "orion_motor0_rps" && sample.value == 1.5));
+        assert!(preview
+            .points
+            .iter()
+            .any(|point| point.series_id == "motor0_angle_rad" && point.value == 2.25));
+    }
+
+    fn state_with_orion_frame() -> ReceiverState {
+        let state = ReceiverState::default();
+        {
+            let mut inner = match state.inner.lock() {
+                Ok(inner) => inner,
+                Err(error) => panic!("failed to lock receiver state: {error}"),
+            };
+            let frame = match CanFrame::new_rx(
+                "CAN0",
+                "test",
+                0x200,
+                IdFormat::Standard,
+                FrameFormat::Classic,
+                FrameType::Data,
+                8,
+                [1.5_f32.to_le_bytes(), (-2.25_f32).to_le_bytes()].concat(),
+            ) {
+                Ok(frame) => frame,
+                Err(error) => panic!("failed to build test frame: {error}"),
+            };
+            inner.latest.ingest(frame);
+        }
+        state
+    }
+}
