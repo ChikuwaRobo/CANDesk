@@ -51,7 +51,31 @@ test("plotter live preview draws points in headless browser mode", async ({ page
   await page.getByRole("button", { name: "Live" }).click();
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(page.getByLabel("plotter workspace")).toContainText("running");
+  await expect(page.getByLabel("plotter workspace")).toContainText(/4 sample\(s\), 4 point\(s\) live/);
   await expect(page.getByText(/last 10s \/ [1-9]\d* point\(s\)/)).toBeVisible();
+  await expect(page.getByText(/last 10s \/ ([5-9]|\d{2,}) point\(s\)/)).toBeVisible();
+  await expect
+    .poll(async () =>
+      page.getByRole("img", { name: "plot preview" }).evaluate((canvas) => {
+        const context = (canvas as HTMLCanvasElement).getContext("2d");
+        if (!context) {
+          return 0;
+        }
+        const { width, height } = canvas as HTMLCanvasElement;
+        const pixels = context.getImageData(0, 0, width, height).data;
+        let coloredPixels = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          const red = pixels[index];
+          const green = pixels[index + 1];
+          const blue = pixels[index + 2];
+          if (Math.max(red, green, blue) - Math.min(red, green, blue) > 30) {
+            coloredPixels += 1;
+          }
+        }
+        return coloredPixels;
+      }),
+    )
+    .toBeGreaterThan(0);
 });
 
 test("plotter csv preview can be cleared headlessly", async ({ page }) => {

@@ -162,7 +162,8 @@ export function drawPlotCanvas(
     context.strokeStyle = series.color;
     context.beginPath();
     let moved = false;
-    for (const point of projectPlotPoints(seriesPoints, bounds, area)) {
+    const projectedPoints = projectPlotPoints(seriesPoints, bounds, area);
+    for (const point of projectedPoints) {
       if (!moved) {
         context.moveTo(point.x, point.y);
         moved = true;
@@ -171,5 +172,11 @@ export function drawPlotCanvas(
       }
     }
     context.stroke();
+    context.fillStyle = series.color;
+    for (const point of projectedPoints) {
+      context.beginPath();
+      context.arc(point.x, point.y, 3, 0, Math.PI * 2);
+      context.fill();
+    }
   }
 }

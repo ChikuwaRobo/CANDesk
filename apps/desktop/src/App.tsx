@@ -32,13 +32,14 @@ import {
   appendUniquePlotPoints,
   appendUniqueSamples,
   filterRecentPlotPoints,
+  maxRealtimePlotPoints,
+  maxRealtimeSamples,
   plotVisibleWindowSeconds,
   resetSeenPlotPointKeys,
   resetSeenSampleKeys,
 } from "./lib/plotHistory";
 import { useDummyFrames } from "./hooks/useDummyFrames";
 import { usePlotCanvas } from "./hooks/usePlotCanvas";
-import { useRealtimePlot } from "./hooks/useRealtimePlot";
 import { useSnapshotPolling } from "./hooks/useSnapshotPolling";
 import "./styles.css";
 
@@ -53,6 +54,9 @@ export default function App() {
   const plotPointKeysRef = React.useRef(new Set<string>());
   const plotPointsRef = React.useRef<PlotPointDto[]>([]);
   const plotSeriesRef = React.useRef<PlotSeries[]>(samplePlotSeries);
+  const livePreviewSequenceRef = React.useRef(0);
+  const realtimePlotTimerRef = React.useRef<number | null>(null);
+  const realtimePlotInFlightRef = React.useRef(false);
   const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
@@ -298,6 +302,7 @@ export default function App() {
 
   async function toggleRealtimePlot() {
     if (realtimePlot) {
+      stopRealtimePlotLoop();
       setRealtimePlot(false);
       setParsePreviewStatus("live stopped");
       return;
@@ -308,8 +313,10 @@ export default function App() {
     if (!loadedSignals || !loadedSeries) {
       return;
     }
+    setParsePreviewStatus("live starting");
     setSignalSamples([]);
     setPlotPoints([]);
+    livePreviewSequenceRef.current = 0;
     signalSampleKeysRef.current.clear();
     plotPointKeysRef.current.clear();
     try {
@@ -317,13 +324,13 @@ export default function App() {
         parserSignals: loadedSignals,
         plotSeries: loadedSeries,
       });
-      applyParsePlotPreview(preview, "live", false);
+      applyParsePlotPreview(stampLivePreview(preview), "live", false);
     } catch (error) {
       setEventLog(`parse/plot preview failed: ${String(error)}`);
       return;
     }
     setRealtimePlot(true);
-    setParsePreviewStatus("live starting");
+    scheduleRealtimePlotRefresh(loadedSignals, loadedSeries);
   }
 
   function applyParsePlotPreview(preview: ParsePlotPreviewDto, sourceLabel: string, append: boolean) {
@@ -345,6 +352,67 @@ export default function App() {
     );
   }
 
+  function stampLivePreview(preview: ParsePlotPreviewDto) {
+    livePreviewSequenceRef.current += 1;
+    const timestamp = (Date.now() / 1000).toFixed(3);
+    const sequenceBase = livePreviewSequenceRef.current * 10000;
+    return {
+      samples: preview.samples.map((sample, index) => ({
+        ...sample,
+        timestamp_host: timestamp,
+        source_sequence: sequenceBase + index,
+      })),
+      points: preview.points.map((point, index) => ({
+        ...point,
+        timestamp_host: timestamp,
+        source_sequence: sequenceBase + index,
+      })),
+    };
+  }
+
+  function stopRealtimePlotLoop() {
+    if (realtimePlotTimerRef.current !== null) {
+      window.clearTimeout(realtimePlotTimerRef.current);
+      realtimePlotTimerRef.current = null;
+    }
+    realtimePlotInFlightRef.current = false;
+  }
+
+  function scheduleRealtimePlotRefresh(
+    loadedSignals: typeof parserSignals,
+    loadedSeries: typeof plotSeries,
+  ) {
+    if (realtimePlotTimerRef.current !== null) {
+      window.clearTimeout(realtimePlotTimerRef.current);
+    }
+    const refresh = async () => {
+      if (realtimePlotInFlightRef.current) {
+        realtimePlotTimerRef.current = window.setTimeout(refresh, realtimePreviewIntervalMs);
+        return;
+      }
+      realtimePlotInFlightRef.current = true;
+      try {
+        const preview = await client.parsePlotPreviewLive({
+          parserSignals: loadedSignals,
+          plotSeries: loadedSeries,
+        });
+        const displayPreview = stampLivePreview(preview);
+        appendLiveParsePlotPreview(displayPreview);
+        setEventLog(
+          client.isPreview
+            ? "browser preview mode; live plot preview is simulated"
+            : `live parsed ${preview.samples.length} sample(s), built ${preview.points.length} plot point(s)`,
+        );
+      } catch (error) {
+        setEventLog(`live parse/plot preview failed: ${String(error)}`);
+      } finally {
+        realtimePlotInFlightRef.current = false;
+        realtimePlotTimerRef.current = window.setTimeout(refresh, realtimePreviewIntervalMs);
+      }
+    };
+    realtimePlotTimerRef.current = window.setTimeout(refresh, realtimePreviewIntervalMs);
+  }
+
   async function refreshParsePlotPreview(append = false) {
     try {
       const preview = append
@@ -355,7 +423,12 @@ export default function App() {
             parserSignals,
             plotSeries,
           });
-      applyParsePlotPreview(preview, append ? "live" : client.isPreview ? "preview" : "", append);
+      const displayPreview = append ? stampLivePreview(preview) : preview;
+      applyParsePlotPreview(
+        displayPreview,
+        append ? "live" : client.isPreview ? "preview" : "",
+        append,
+      );
       setEventLog(
         client.isPreview
           ? "browser preview mode; parse and plot preview is simulated"
@@ -364,6 +437,22 @@ export default function App() {
     } catch (error) {
       setEventLog(`parse/plot preview failed: ${String(error)}`);
     }
+  }
+
+  function appendLiveParsePlotPreview(preview: ParsePlotPreviewDto) {
+    setSignalSamples((current) => {
+      const next = [...current, ...preview.samples].slice(-maxRealtimeSamples);
+      resetSeenSampleKeys(next, signalSampleKeysRef.current);
+      return next;
+    });
+    setPlotPoints((current) => {
+      const next = [...current, ...preview.points].slice(-maxRealtimePlotPoints);
+      resetSeenPlotPointKeys(next, plotPointKeysRef.current);
+      return next;
+    });
+    setParsePreviewStatus(
+      `${preview.samples.length} sample(s), ${preview.points.length} point(s) live`,
+    );
   }
 
   async function refreshCaptureFilePreview() {
@@ -403,6 +492,8 @@ export default function App() {
     void startServer();
   }, []);
 
+  React.useEffect(() => stopRealtimePlotLoop, []);
+
   useSnapshotPolling({
     client,
     enabled: !client.isPreview && !debugDummy,
@@ -422,17 +513,6 @@ export default function App() {
     setBuses,
     setFrames,
     setEventLog,
-  });
-
-  const refreshRealtimePlot = React.useCallback(
-    () => refreshParsePlotPreview(true),
-    [parseConfigPath, plotLayoutPath, parserSignals, plotSeries],
-  );
-
-  useRealtimePlot({
-    enabled: realtimePlot,
-    intervalMs: realtimePreviewIntervalMs,
-    refresh: refreshRealtimePlot,
   });
 
   usePlotCanvas({
@@ -513,6 +593,8 @@ export default function App() {
           visiblePlotPoints={visiblePlotPoints}
           plotPointRows={plotPointRows}
           plotPoints={plotPoints}
+          signalSampleCount={signalSamples.length}
+          parsePreviewStatus={parsePreviewStatus}
           realtimePlot={realtimePlot}
           plotVisibleWindowSeconds={plotVisibleWindowSeconds}
           plotCanvasRef={plotCanvasRef}

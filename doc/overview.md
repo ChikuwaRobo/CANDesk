@@ -111,6 +111,10 @@ npm.cmd run tauri dev
 
 実ウィンドウ確認は、Tauri IPC、server process 起動、serial port、Windows WebView2 固有挙動など、headless smoke では切り分けられない場合に限定する。
 
+2026-05-28 の実機切り分けでは、GUI が起動した `canrush-server-gui` に対して CLI から `stats` / `capture` / `parse` を実行し、`COM3` / `COM85` の両バスで数千 fps 規模の受信と `examples/orion.canrush-parse.json` による信号抽出を確認している。CAN 受信、server stream、parse config 適用は成立しているため、GUI の Live Plot 不具合は Tauri 側の latest frame 共有、live preview command、plot layout mapping、canvas 表示のどこで止まるかを分けて確認する。Plotter 画面には `Samples` と `Status` を表示し、Live 押下後に「sample は増えるが point が 0」「point は増えるが canvas が空」などを実ウィンドウ上で判定できるようにしている。
+
+Live Plot の描画では、1 系列 1 点だけの初期状態でも見えるように canvas 上で線に加えて点マーカーを描く。Live は server の latest snapshot を周期的に読むため、GUI 表示用の plot point はポーリング時刻で刻んで履歴に追加する。これにより latest snapshot が同じ CAN ID 群だけを返す状態でも、時間軸上に値が積まれ、実ウィンドウで `Points` が増え続けることを確認できる。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

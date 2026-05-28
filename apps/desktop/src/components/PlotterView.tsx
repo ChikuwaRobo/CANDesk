@@ -14,6 +14,8 @@ type PlotterViewProps = {
   visiblePlotPoints: PlotPointDto[];
   plotPointRows: PlotPointDto[];
   plotPoints: PlotPointDto[];
+  signalSampleCount: number;
+  parsePreviewStatus: string;
   realtimePlot: boolean;
   plotVisibleWindowSeconds: number;
   plotCanvasRef: RefObject<HTMLCanvasElement>;
@@ -39,6 +41,8 @@ export function PlotterView({
   visiblePlotPoints,
   plotPointRows,
   plotPoints,
+  signalSampleCount,
+  parsePreviewStatus,
   realtimePlot,
   plotVisibleWindowSeconds,
   plotCanvasRef,
@@ -66,6 +70,14 @@ export function PlotterView({
           <div>
             <span>Points</span>
             <strong>{visiblePlotPoints.length}</strong>
+          </div>
+          <div>
+            <span>Samples</span>
+            <strong>{signalSampleCount}</strong>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong>{parsePreviewStatus}</strong>
           </div>
           <div>
             <span>Live</span>
