@@ -1,10 +1,11 @@
 import { Activity, CirclePause, FileJson, LineChart, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import type { RefObject } from "react";
-import type { PlotPointDto, PlotSeries } from "../types";
+import type { BufferedPlotPoint } from "../lib/plotSeriesBuffer";
+import type { PlotSeries } from "../types";
 
 type CurrentPlotValue = {
   series: PlotSeries;
-  latestPoint?: PlotPointDto;
+  latestPoint?: BufferedPlotPoint;
 };
 
 type PlotPerformance = {
@@ -24,9 +25,9 @@ type PlotterViewProps = {
   selectedSeries: PlotSeries;
   selectedSeriesId: string;
   visibleSeriesIds: string[];
-  selectedSeriesPoints: PlotPointDto[];
+  selectedSeriesPointCount: number;
   selectedPanelTitle: string;
-  visiblePlotPoints: PlotPointDto[];
+  visiblePlotPointCount: number;
   currentPlotValues: CurrentPlotValue[];
   hasPlotPoints: boolean;
   plotPerformance: PlotPerformance;
@@ -54,9 +55,9 @@ export function PlotterView({
   selectedSeries,
   selectedSeriesId,
   visibleSeriesIds,
-  selectedSeriesPoints,
+  selectedSeriesPointCount,
   selectedPanelTitle,
-  visiblePlotPoints,
+  visiblePlotPointCount,
   currentPlotValues,
   hasPlotPoints,
   plotPerformance,
@@ -89,7 +90,7 @@ export function PlotterView({
         <div className="config-metrics">
           <div>
             <span>Points</span>
-            <strong>{visiblePlotPoints.length}</strong>
+            <strong>{visiblePlotPointCount}</strong>
           </div>
           <div>
             <span>Samples</span>
@@ -170,7 +171,7 @@ export function PlotterView({
         <div className="workspace-summary">
           <div>
             <span>Selected points</span>
-            <strong>{selectedSeriesPoints.length}</strong>
+            <strong>{selectedSeriesPointCount}</strong>
           </div>
           <div>
             <span>Panel</span>
@@ -227,7 +228,7 @@ export function PlotterView({
           <div className="plot-preview-header">
             <strong>{selectedPanelTitle}</strong>
             <span>
-              last {plotVisibleWindowSeconds}s / {visiblePlotPoints.length} point(s)
+              last {plotVisibleWindowSeconds}s / {visiblePlotPointCount} point(s)
             </span>
           </div>
           <canvas ref={plotCanvasRef} role="img" aria-label="plot preview" />

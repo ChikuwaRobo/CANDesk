@@ -2,7 +2,6 @@ import React from "react";
 import type {
   BusConfig,
   ParsePlotPreviewDto,
-  PlotPointDto,
   PlotSeries,
   SerialPortInfo,
   SignalSampleDto,
@@ -29,15 +28,20 @@ import {
 } from "./lib/frames";
 import { mapParseConfig, mapPlotLayout } from "./lib/parserMapping";
 import {
-  appendUniquePlotPoints,
   appendUniqueSamples,
-  filterRecentPlotPoints,
-  maxRealtimePlotPoints,
   maxRealtimeSamples,
   plotVisibleWindowSeconds,
-  resetSeenPlotPointKeys,
   resetSeenSampleKeys,
 } from "./lib/plotHistory";
+import {
+  appendPlotPointsToBuffers,
+  clearPlotSeriesBuffers,
+  countBufferedPointsInWindow,
+  createPlotSeriesBuffers,
+  ensurePlotSeriesBuffers,
+  getCurrentPlotValuesFromBuffers,
+  resetPlotSeriesBuffers,
+} from "./lib/plotSeriesBuffer";
 import { useDummyFrames } from "./hooks/useDummyFrames";
 import { usePlotCanvas } from "./hooks/usePlotCanvas";
 import { useSnapshotPolling } from "./hooks/useSnapshotPolling";
@@ -59,9 +63,9 @@ export default function App() {
   const client = React.useMemo(() => getCanRushClient(), []);
   const plotCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const signalSampleKeysRef = React.useRef(new Set<string>());
-  const plotPointKeysRef = React.useRef(new Set<string>());
-  const plotPointsRef = React.useRef<PlotPointDto[]>([]);
+  const plotBuffersRef = React.useRef(createPlotSeriesBuffers(samplePlotSeries));
   const plotSeriesRef = React.useRef<PlotSeries[]>(samplePlotSeries);
+  const visibleSeriesIdsRef = React.useRef<string[]>([samplePlotSeries[0].id]);
   const livePreviewSequenceRef = React.useRef(0);
   const realtimePlotTimerRef = React.useRef<number | null>(null);
   const realtimePlotInFlightRef = React.useRef(false);
@@ -100,7 +104,8 @@ export default function App() {
     samplePlotSeries[0].id,
   ]);
   const [signalSamples, setSignalSamples] = React.useState<SignalSampleDto[]>([]);
-  const [plotPoints, setPlotPoints] = React.useState<PlotPointDto[]>([]);
+  const [visiblePlotPointCount, setVisiblePlotPointCount] = React.useState(0);
+  const [plotValueVersion, setPlotValueVersion] = React.useState(0);
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
   const [realtimePlot, setRealtimePlot] = React.useState(false);
   const [plotPerformance, setPlotPerformance] = React.useState<PlotPerformance>({
@@ -133,36 +138,30 @@ export default function App() {
   const selectedSeries =
     plotSeries.find((series) => series.id === selectedSeriesId) ?? samplePlotSeries[0]!;
   const selectedPanelTitle = selectedSeries.panelTitle;
-  const displayedPlotPoints = plotPoints.filter((point) =>
-    visibleSeriesIds.includes(point.series_id),
-  );
-  const visiblePlotPoints = filterRecentPlotPoints(displayedPlotPoints, plotVisibleWindowSeconds);
   const selectedSignalSamples = signalSamples.filter(
     (sample) => sample.signal_id === selectedSignal.id,
   );
-  const selectedSeriesPoints = visiblePlotPoints.filter(
-    (point) => point.series_id === selectedSeries.id,
+  const selectedSeriesPointCount = countBufferedPointsInWindow(
+    plotBuffersRef.current,
+    [selectedSeries.id],
+    plotVisibleWindowSeconds,
   );
-  const currentPlotValues = plotSeries
-    .filter((series) => visibleSeriesIds.includes(series.id))
-    .map((series) => {
-      let latestPoint: PlotPointDto | undefined;
-      for (let index = visiblePlotPoints.length - 1; index >= 0; index -= 1) {
-        if (visiblePlotPoints[index].series_id === series.id) {
-          latestPoint = visiblePlotPoints[index];
-          break;
-        }
-      }
-      return { series, latestPoint };
-    });
-
-  React.useEffect(() => {
-    plotPointsRef.current = displayedPlotPoints;
-  }, [displayedPlotPoints]);
+  const currentPlotValues = React.useMemo(
+    () => getCurrentPlotValuesFromBuffers(plotBuffersRef.current, plotSeries, visibleSeriesIds),
+    [plotSeries, plotValueVersion, visibleSeriesIds],
+  );
 
   React.useEffect(() => {
     plotSeriesRef.current = plotSeries;
+    ensurePlotSeriesBuffers(plotBuffersRef.current, plotSeries);
   }, [plotSeries]);
+
+  React.useEffect(() => {
+    visibleSeriesIdsRef.current = visibleSeriesIds;
+    setVisiblePlotPointCount(
+      countBufferedPointsInWindow(plotBuffersRef.current, visibleSeriesIds, plotVisibleWindowSeconds),
+    );
+  }, [visibleSeriesIds, plotValueVersion]);
 
   React.useEffect(() => {
     if (visibleFrames.length === 0) {
@@ -172,6 +171,24 @@ export default function App() {
       setSelectedFrameId(visibleFrames[0].rowKey);
     }
   }, [selectedFrameId, visibleFrames]);
+
+  function refreshPlotBufferMetrics(seriesIds = visibleSeriesIds) {
+    setVisiblePlotPointCount(
+      countBufferedPointsInWindow(plotBuffersRef.current, seriesIds, plotVisibleWindowSeconds),
+    );
+    setPlotValueVersion((version) => version + 1);
+  }
+
+  function replacePlotBufferPoints(seriesList: PlotSeries[], preview: ParsePlotPreviewDto, seriesIds = visibleSeriesIds) {
+    resetPlotSeriesBuffers(plotBuffersRef.current, seriesList);
+    appendPlotPointsToBuffers(plotBuffersRef.current, preview.points);
+    refreshPlotBufferMetrics(seriesIds);
+  }
+
+  function appendPlotBufferPoints(preview: ParsePlotPreviewDto, seriesIds = visibleSeriesIds) {
+    appendPlotPointsToBuffers(plotBuffersRef.current, preview.points);
+    refreshPlotBufferMetrics(seriesIds);
+  }
 
   async function refreshPorts() {
     try {
@@ -300,7 +317,8 @@ export default function App() {
       setSelectedSignalId(nextSignals[0]?.id ?? "");
       setParseConfigName(config.name || parseConfigPath);
       setSignalSamples([]);
-      setPlotPoints([]);
+      clearPlotSeriesBuffers(plotBuffersRef.current);
+      refreshPlotBufferMetrics();
       setParsePreviewStatus("config loaded");
       setEventLog(
         client.isPreview
@@ -322,7 +340,8 @@ export default function App() {
       setSelectedSeriesId(nextSeries[0]?.id ?? "");
       setVisibleSeriesIds(nextSeries[0] ? [nextSeries[0].id] : []);
       setPlotLayoutName(layout.name || plotLayoutPath);
-      setPlotPoints([]);
+      resetPlotSeriesBuffers(plotBuffersRef.current, nextSeries);
+      refreshPlotBufferMetrics(nextSeries[0] ? [nextSeries[0].id] : []);
       setParsePreviewStatus("layout loaded");
       setEventLog(
         client.isPreview
@@ -356,11 +375,11 @@ export default function App() {
     setVisibleSeriesIds(selectedLiveSeriesIds);
     setParsePreviewStatus("live starting");
     setSignalSamples([]);
-    setPlotPoints([]);
+    resetPlotSeriesBuffers(plotBuffersRef.current, loadedSeries);
+    refreshPlotBufferMetrics(selectedLiveSeriesIds);
     livePreviewSequenceRef.current = 0;
     livePlotCursorRef.current = null;
     signalSampleKeysRef.current.clear();
-    plotPointKeysRef.current.clear();
     try {
       const preview = await client.parsePlotLiveSince({
         parserSignals: loadedSignals,
@@ -369,7 +388,7 @@ export default function App() {
         selectedSeriesIds: selectedLiveSeriesIds,
       });
       livePlotCursorRef.current = preview.next_sequence;
-      applyParsePlotPreview(preview, "live", false);
+      applyParsePlotPreview(preview, "live", false, loadedSeries, selectedLiveSeriesIds);
     } catch (error) {
       setEventLog(`parse/plot preview failed: ${String(error)}`);
       return;
@@ -378,19 +397,22 @@ export default function App() {
     scheduleRealtimePlotRefresh(loadedSignals, loadedSeries, selectedLiveSeriesIds);
   }
 
-  function applyParsePlotPreview(preview: ParsePlotPreviewDto, sourceLabel: string, append: boolean) {
+  function applyParsePlotPreview(
+    preview: ParsePlotPreviewDto,
+    sourceLabel: string,
+    append: boolean,
+    seriesList = plotSeries,
+    seriesIds = visibleSeriesIds,
+  ) {
     if (append) {
       setSignalSamples((current) =>
         appendUniqueSamples(current, preview.samples, signalSampleKeysRef.current),
       );
-      setPlotPoints((current) =>
-        appendUniquePlotPoints(current, preview.points, plotPointKeysRef.current),
-      );
+      appendPlotBufferPoints(preview, seriesIds);
     } else {
       setSignalSamples(preview.samples);
-      setPlotPoints(preview.points);
+      replacePlotBufferPoints(seriesList, preview, seriesIds);
       resetSeenSampleKeys(preview.samples, signalSampleKeysRef.current);
-      resetSeenPlotPointKeys(preview.points, plotPointKeysRef.current);
     }
     setParsePreviewStatus(
       `${preview.samples.length} sample(s), ${preview.points.length} point(s) ${sourceLabel}`,
@@ -500,11 +522,7 @@ export default function App() {
       resetSeenSampleKeys(next, signalSampleKeysRef.current);
       return next;
     });
-    setPlotPoints((current) => {
-      const next = [...current, ...preview.points].slice(-maxRealtimePlotPoints);
-      resetSeenPlotPointKeys(next, plotPointKeysRef.current);
-      return next;
-    });
+    appendPlotBufferPoints(preview);
     setParsePreviewStatus(
       `${preview.samples.length} sample(s), ${preview.points.length} point(s) live`,
     );
@@ -512,11 +530,11 @@ export default function App() {
 
   function resetPlotHistory() {
     setSignalSamples([]);
-    setPlotPoints([]);
+    clearPlotSeriesBuffers(plotBuffersRef.current);
+    refreshPlotBufferMetrics();
     livePreviewSequenceRef.current = 0;
     livePlotCursorRef.current = null;
     signalSampleKeysRef.current.clear();
-    plotPointKeysRef.current.clear();
   }
 
   function toggleVisibleSeries(seriesId: string) {
@@ -524,7 +542,12 @@ export default function App() {
       ? visibleSeriesIds.filter((id) => id !== seriesId)
       : [...visibleSeriesIds, seriesId];
     setVisibleSeriesIds(next);
-    resetPlotHistory();
+    setSignalSamples([]);
+    clearPlotSeriesBuffers(plotBuffersRef.current);
+    refreshPlotBufferMetrics(next);
+    livePreviewSequenceRef.current = 0;
+    livePlotCursorRef.current = null;
+    signalSampleKeysRef.current.clear();
     if (realtimePlot) {
       scheduleRealtimePlotRefresh(parserSignals, plotSeries, next);
     }
@@ -540,9 +563,8 @@ export default function App() {
         plotSeries,
       });
       setSignalSamples(preview.samples);
-      setPlotPoints(preview.points);
+      replacePlotBufferPoints(plotSeries, preview);
       resetSeenSampleKeys(preview.samples, signalSampleKeysRef.current);
-      resetSeenPlotPointKeys(preview.points, plotPointKeysRef.current);
       setParsePreviewStatus(
         `${preview.samples.length} sample(s), ${preview.points.length} point(s) from CSV`,
       );
@@ -594,7 +616,8 @@ export default function App() {
     enabled: workspaceView === "plotter",
     canvasRef: plotCanvasRef,
     seriesRef: plotSeriesRef,
-    pointsRef: plotPointsRef,
+    buffersRef: plotBuffersRef,
+    visibleSeriesIdsRef,
     frameMs: plotRenderFrameMs,
     onDraw: (canvasDrawMs, canvasRawPoints, canvasPoints, decimationMs) => {
       const now = performance.now();
@@ -678,11 +701,11 @@ export default function App() {
           selectedSeries={selectedSeries}
           selectedSeriesId={selectedSeriesId}
           visibleSeriesIds={visibleSeriesIds}
-          selectedSeriesPoints={selectedSeriesPoints}
+          selectedSeriesPointCount={selectedSeriesPointCount}
           selectedPanelTitle={selectedPanelTitle}
-          visiblePlotPoints={visiblePlotPoints}
+          visiblePlotPointCount={visiblePlotPointCount}
           currentPlotValues={currentPlotValues}
-          hasPlotPoints={visiblePlotPoints.length > 0}
+          hasPlotPoints={visiblePlotPointCount > 0}
           plotPerformance={plotPerformance}
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
@@ -697,10 +720,10 @@ export default function App() {
           onToggleRealtimePlot={toggleRealtimePlot}
           onClearPlot={() => {
             setSignalSamples([]);
-            setPlotPoints([]);
+            clearPlotSeriesBuffers(plotBuffersRef.current);
+            refreshPlotBufferMetrics();
             livePlotCursorRef.current = null;
             signalSampleKeysRef.current.clear();
-            plotPointKeysRef.current.clear();
             setParsePreviewStatus("cleared");
           }}
           onSelectedSeriesChange={setSelectedSeriesId}

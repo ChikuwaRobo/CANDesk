@@ -123,6 +123,12 @@ Plotter では大量の plot point をテキスト表として表示しない。
 
 Plotter canvas は高密度時に raw point を直接すべて描かず、描画時だけ pixel bucket の min/max envelope に変換する。元データは捨てず、canvas へ渡す点数だけを series あたり最大 400 点に抑える。2026-05-29 の browser benchmark では、10 series × 10,000 点、合計 100,000 点の合成データで、最適化前の目安が平均 3.5ms / p95 7.0ms、初期 min/max 実装が平均 23.2ms / p95 29.4ms、最終実装が平均 8.4ms / p95 10.3ms だった。通常の preview Live 4 series 条件では raw 3,600 点に対して drawable 1,252 点、Canvas draw 約 1.0ms を確認している。
 
+追加の軽量化比較では、同じ 100,000 点条件で、現行 object 配列 + min/max envelope が平均 8.1ms / p95 9.2ms、TypedArray 系列バッファ + min/max line prototype が平均 0.8ms / p95 0.6ms、TypedArray + vertical min/max bars prototype が平均 0.6ms / p95 0.5ms だった。uPlot は既存ライブラリ参考として試したが、同一データ redraw が no-op に近い測定になり、直接比較には使いにくい。次の本実装候補は、Plotter の描画用データ構造を series 単位の typed arrays / ring buffer に移すこと。
+
+2026-05-29 に上記 4 の方針として、GUI Plotter の描画用データを `PlotPointDto[]` の React state から series 単位の `Float64Array` / `Float32Array` ring buffer に移した。Live Plot の canvas は `apps/desktop/src/lib/plotSeriesBuffer.ts` のバッファを直接読み、描画時に pixel bucket の min/max line へ変換する。これにより、点履歴の追記で巨大な object 配列を再生成せず、React state は表示用の件数と現在値の更新に限定する。実装後の確認では `npm.cmd run build`、`npm.cmd run test:unit`、`npm.cmd run test:smoke` が成功し、browser preview の Plotter Live で console error なし、Raw points 840 / Drawable 293 / Decimate 0.1ms / Canvas draw 1.8ms 程度を確認した。
+
+同日、描画形状の乱れを避けるため、Plotter の保持方式を raw point ring buffer から 60Hz 固定時間 bucket 集約へ変更した。各 series は受信 timestamp から `floor(timestamp * 60)` で bucket を決め、bucket ごとに min / max / avg / count だけを保持する。canvas は min/max を薄い縦線、avg を主線として描画するため、同じデータであれば GUI の再描画タイミングや Live API の返却chunkが変わっても同じ bucket 列になる。Vitest には「同じ入力を一括投入しても分割投入しても bucket が一致する」テストを追加した。browser preview の Plotter Live では console error なし、Raw points 444-744、Drawable 675-1131、Decimate 0.0ms、Canvas draw 0.1-1.9ms 程度を確認した。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

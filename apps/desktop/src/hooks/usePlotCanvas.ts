@@ -1,12 +1,14 @@
 import React from "react";
-import { drawPlotCanvas } from "../lib/plotCanvas";
-import type { PlotPointDto, PlotSeries } from "../types";
+import { drawPlotCanvasFromBuffers } from "../lib/plotCanvas";
+import type { PlotSeriesBufferMap } from "../lib/plotSeriesBuffer";
+import type { PlotSeries } from "../types";
 
 type UsePlotCanvasInput = {
   enabled: boolean;
   canvasRef: React.RefObject<HTMLCanvasElement>;
   seriesRef: React.MutableRefObject<PlotSeries[]>;
-  pointsRef: React.MutableRefObject<PlotPointDto[]>;
+  buffersRef: React.MutableRefObject<PlotSeriesBufferMap>;
+  visibleSeriesIdsRef: React.MutableRefObject<string[]>;
   frameMs: number;
   onDraw?: (elapsedMs: number, rawPointCount: number, drawablePointCount: number, decimationMs: number) => void;
 };
@@ -15,7 +17,8 @@ export function usePlotCanvas({
   enabled,
   canvasRef,
   seriesRef,
-  pointsRef,
+  buffersRef,
+  visibleSeriesIdsRef,
   frameMs,
   onDraw,
 }: UsePlotCanvasInput) {
@@ -31,7 +34,12 @@ export function usePlotCanvas({
         const canvas = canvasRef.current;
         if (canvas) {
           const startedAt = performance.now();
-          const stats = drawPlotCanvas(canvas, seriesRef.current, pointsRef.current);
+          const stats = drawPlotCanvasFromBuffers(
+            canvas,
+            seriesRef.current,
+            buffersRef.current,
+            visibleSeriesIdsRef.current,
+          );
           onDraw?.(
             performance.now() - startedAt,
             stats.rawPoints,
@@ -46,5 +54,5 @@ export function usePlotCanvas({
     animationFrame = window.requestAnimationFrame(draw);
 
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [canvasRef, enabled, frameMs, pointsRef, seriesRef]);
+  }, [buffersRef, canvasRef, enabled, frameMs, seriesRef, visibleSeriesIdsRef]);
 }

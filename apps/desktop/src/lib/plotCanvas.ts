@@ -1,5 +1,7 @@
 import type { PlotPointDto, PlotSeries } from "../types";
 import { filterRecentPlotPoints, plotVisibleWindowSeconds } from "./plotHistory";
+import type { PlotSeriesBufferMap } from "./plotSeriesBuffer";
+import { forEachPlotBufferBucket, getLatestBufferedTimestamp, plotAggregationIntervalSeconds } from "./plotSeriesBuffer";
 
 export const maxCanvasPointsPerSeries = 400;
 
@@ -327,5 +329,206 @@ export function drawPlotCanvas(
       }
     }
   }
+  return { rawPoints, drawablePoints, decimationMs };
+}
+
+function setupPlotCanvas(canvas: HTMLCanvasElement) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.floor(rect.width));
+  const height = Math.max(1, Math.floor(rect.height));
+  const pixelWidth = Math.floor(width * dpr);
+  const pixelHeight = Math.floor(height * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return null;
+  }
+
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#f4f7f8";
+  context.fillRect(0, 0, width, height);
+
+  const left = 34;
+  const right = 12;
+  const top = 14;
+  const bottom = 24;
+  const area = {
+    left,
+    top,
+    width: Math.max(1, width - left - right),
+    height: Math.max(1, height - top - bottom),
+  };
+
+  context.strokeStyle = "#d4dee1";
+  context.lineWidth = 1;
+  context.beginPath();
+  for (let index = 0; index <= 4; index += 1) {
+    const y = top + (area.height * index) / 4;
+    context.moveTo(left, y);
+    context.lineTo(left + area.width, y);
+  }
+  context.stroke();
+
+  context.strokeStyle = "#9ca9ae";
+  context.beginPath();
+  context.moveTo(left, top);
+  context.lineTo(left, top + area.height);
+  context.lineTo(left + area.width, top + area.height);
+  context.stroke();
+
+  return { context, area };
+}
+
+function calculateBufferedBounds(
+  buffers: PlotSeriesBufferMap,
+  seriesIds: string[],
+  windowSeconds = plotVisibleWindowSeconds,
+): PlotCanvasBounds | null {
+  const latestTimestamp = getLatestBufferedTimestamp(buffers, seriesIds);
+  if (!Number.isFinite(latestTimestamp)) {
+    return null;
+  }
+  const cutoff = latestTimestamp - windowSeconds;
+  let globalMinValue = Number.POSITIVE_INFINITY;
+  let globalMaxValue = Number.NEGATIVE_INFINITY;
+  let hasPoints = false;
+  for (const seriesId of seriesIds) {
+    const buffer = buffers.get(seriesId);
+    if (!buffer) {
+      continue;
+    }
+    forEachPlotBufferBucket(buffer, (bucketStart, bucketMinValue, bucketMaxValue) => {
+      if (bucketStart < cutoff || !Number.isFinite(bucketMinValue) || !Number.isFinite(bucketMaxValue)) {
+        return;
+      }
+      hasPoints = true;
+      if (bucketMinValue < globalMinValue) {
+        globalMinValue = bucketMinValue;
+      }
+      if (bucketMaxValue > globalMaxValue) {
+        globalMaxValue = bucketMaxValue;
+      }
+    });
+  }
+  if (!hasPoints) {
+    return null;
+  }
+  return {
+    minTime: cutoff,
+    maxTime: latestTimestamp,
+    minValue: globalMinValue,
+    maxValue: globalMaxValue,
+    timeRange: Math.max(0.001, windowSeconds),
+    valueRange: Math.max(0.001, globalMaxValue - globalMinValue),
+  };
+}
+
+export function drawPlotCanvasFromBuffers(
+  canvas: HTMLCanvasElement,
+  seriesList: PlotSeries[],
+  buffers: PlotSeriesBufferMap,
+  visibleSeriesIds: string[],
+): PlotCanvasStats {
+  const emptyStats = { rawPoints: 0, drawablePoints: 0, decimationMs: 0 };
+  const prepared = setupPlotCanvas(canvas);
+  if (!prepared) {
+    return emptyStats;
+  }
+  const { context, area } = prepared;
+  const visibleIdSet = new Set(visibleSeriesIds);
+  const drawableSeries = seriesList.filter((series) => visibleIdSet.has(series.id));
+  const bounds = calculateBufferedBounds(buffers, drawableSeries.map((series) => series.id));
+  if (!bounds) {
+    return emptyStats;
+  }
+
+  const decimationStartedAt = performance.now();
+  let rawPoints = 0;
+  let drawablePoints = 0;
+
+  type AggregatedBucket = {
+    bucketTime: number;
+    minValue: number;
+    maxValue: number;
+    avgValue: number;
+    count: number;
+  };
+  type SeriesBuckets = {
+    series: PlotSeries;
+    buckets: AggregatedBucket[];
+  };
+  const aggregatedSeries: SeriesBuckets[] = [];
+
+  for (const series of drawableSeries) {
+    const buffer = buffers.get(series.id);
+    if (!buffer || buffer.length === 0) {
+      continue;
+    }
+    const buckets: AggregatedBucket[] = [];
+    forEachPlotBufferBucket(buffer, (bucketStart, minValue, maxValue, avgValue, count) => {
+      if (bucketStart < bounds.minTime || bucketStart > bounds.maxTime || count === 0) {
+        return;
+      }
+      buckets.push({
+        bucketTime: bucketStart + plotAggregationIntervalSeconds / 2,
+        minValue,
+        maxValue,
+        avgValue,
+        count,
+      });
+      rawPoints += count;
+    });
+    if (buckets.length === 0) {
+      continue;
+    }
+    drawablePoints += buckets.length * 3;
+    aggregatedSeries.push({ series, buckets });
+  }
+  const decimationMs = performance.now() - decimationStartedAt;
+
+  context.lineJoin = "round";
+  context.lineCap = "round";
+
+  for (const bucketSeries of aggregatedSeries) {
+    context.save();
+    context.strokeStyle = bucketSeries.series.color;
+    context.globalAlpha = 0.35;
+    context.lineWidth = 1;
+    context.beginPath();
+    for (const bucket of bucketSeries.buckets) {
+      const x = area.left + ((bucket.bucketTime - bounds.minTime) / bounds.timeRange) * area.width;
+      const minY =
+        area.top + area.height - ((bucket.minValue - bounds.minValue) / bounds.valueRange) * area.height;
+      const maxY =
+        area.top + area.height - ((bucket.maxValue - bounds.minValue) / bounds.valueRange) * area.height;
+      context.moveTo(x, minY);
+      context.lineTo(x, maxY);
+    }
+    context.stroke();
+    context.restore();
+
+    context.strokeStyle = bucketSeries.series.color;
+    context.lineWidth = 2;
+    context.beginPath();
+    let moved = false;
+    for (const bucket of bucketSeries.buckets) {
+      const x = area.left + ((bucket.bucketTime - bounds.minTime) / bounds.timeRange) * area.width;
+      const y =
+        area.top + area.height - ((bucket.avgValue - bounds.minValue) / bounds.valueRange) * area.height;
+      if (!moved) {
+        context.moveTo(x, y);
+        moved = true;
+      } else {
+        context.lineTo(x, y);
+      }
+    }
+    context.stroke();
+  }
+
   return { rawPoints, drawablePoints, decimationMs };
 }
