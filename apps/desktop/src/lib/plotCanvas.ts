@@ -1,7 +1,7 @@
 import type { PlotPointDto, PlotSeries } from "../types";
 import { filterRecentPlotPoints, plotVisibleWindowSeconds } from "./plotHistory";
 
-export const maxCanvasPointsPerSeries = 1600;
+export const maxCanvasPointsPerSeries = 400;
 
 export type PlotCanvasArea = {
   left: number;
@@ -23,6 +23,19 @@ export type PlotCanvasPoint = {
   x: number;
   y: number;
   point: PlotPointDto;
+};
+
+export type PlotCanvasStats = {
+  rawPoints: number;
+  drawablePoints: number;
+  decimationMs: number;
+};
+
+export const plotMarkerThresholdPerSeries = 240;
+
+type PreparedPlotData = {
+  pointsBySeries: Map<string, PlotPointDto[]>;
+  bounds: PlotCanvasBounds | null;
 };
 
 export function groupDrawablePointsBySeries(
@@ -47,17 +60,32 @@ export function calculatePlotBounds(
   pointsBySeries: Map<string, PlotPointDto[]>,
   windowSeconds = plotVisibleWindowSeconds,
 ): PlotCanvasBounds | null {
-  const drawablePoints = Array.from(pointsBySeries.values()).flat();
-  if (drawablePoints.length === 0) {
+  let hasPoints = false;
+  let maxTime = Number.NEGATIVE_INFINITY;
+  let minValue = Number.POSITIVE_INFINITY;
+  let maxValue = Number.NEGATIVE_INFINITY;
+  for (const seriesPoints of pointsBySeries.values()) {
+    for (const point of seriesPoints) {
+      const timestamp = Number.parseFloat(point.timestamp_host);
+      if (!Number.isFinite(timestamp) || !Number.isFinite(point.value)) {
+        continue;
+      }
+      hasPoints = true;
+      if (timestamp > maxTime) {
+        maxTime = timestamp;
+      }
+      if (point.value < minValue) {
+        minValue = point.value;
+      }
+      if (point.value > maxValue) {
+        maxValue = point.value;
+      }
+    }
+  }
+  if (!hasPoints) {
     return null;
   }
-
-  const maxTime = Math.max(
-    ...drawablePoints.map((point) => Number.parseFloat(point.timestamp_host)),
-  );
   const minTime = maxTime - windowSeconds;
-  const minValue = Math.min(...drawablePoints.map((point) => point.value));
-  const maxValue = Math.max(...drawablePoints.map((point) => point.value));
 
   return {
     minTime,
@@ -69,15 +97,66 @@ export function calculatePlotBounds(
   };
 }
 
+function preparePlotData(
+  points: PlotPointDto[],
+  windowSeconds = plotVisibleWindowSeconds,
+): PreparedPlotData {
+  let latestTimestamp = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    const timestamp = Number.parseFloat(point.timestamp_host);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+  if (!Number.isFinite(latestTimestamp)) {
+    return { pointsBySeries: new Map(), bounds: null };
+  }
+
+  const cutoff = latestTimestamp - windowSeconds;
+  const pointsBySeries = new Map<string, PlotPointDto[]>();
+  let hasPoints = false;
+  let minValue = Number.POSITIVE_INFINITY;
+  let maxValue = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    const timestamp = Number.parseFloat(point.timestamp_host);
+    if (!Number.isFinite(timestamp) || timestamp < cutoff || !Number.isFinite(point.value)) {
+      continue;
+    }
+    hasPoints = true;
+    if (point.value < minValue) {
+      minValue = point.value;
+    }
+    if (point.value > maxValue) {
+      maxValue = point.value;
+    }
+    const seriesPoints = pointsBySeries.get(point.series_id);
+    if (seriesPoints) {
+      seriesPoints.push(point);
+    } else {
+      pointsBySeries.set(point.series_id, [point]);
+    }
+  }
+  if (!hasPoints) {
+    return { pointsBySeries, bounds: null };
+  }
+  const bounds = {
+    minTime: cutoff,
+    maxTime: latestTimestamp,
+    minValue,
+    maxValue,
+    timeRange: Math.max(0.001, windowSeconds),
+    valueRange: Math.max(0.001, maxValue - minValue),
+  };
+  return { pointsBySeries, bounds };
+}
+
 export function projectPlotPoints(
   points: PlotPointDto[],
   bounds: PlotCanvasBounds,
   area: PlotCanvasArea,
-  maxPoints = maxCanvasPointsPerSeries,
 ): PlotCanvasPoint[] {
-  const stride = Math.max(1, Math.ceil(points.length / maxPoints));
   const projected: PlotCanvasPoint[] = [];
-  for (let index = 0; index < points.length; index += stride) {
+  for (let index = 0; index < points.length; index += 1) {
     const point = points[index];
     const timestamp = Number.parseFloat(point.timestamp_host);
     projected.push({
@@ -92,11 +171,63 @@ export function projectPlotPoints(
   return projected;
 }
 
+export function decimatePointsByPixelMinMax(
+  points: PlotPointDto[],
+  bounds: PlotCanvasBounds,
+  area: PlotCanvasArea,
+): PlotPointDto[] {
+  if (points.length <= area.width) {
+    return points;
+  }
+  const bucketCount = Math.max(
+    1,
+    Math.min(Math.floor(area.width) + 1, Math.floor(maxCanvasPointsPerSeries / 2)),
+  );
+  const minPoints = new Array<PlotPointDto | undefined>(bucketCount);
+  const maxPoints = new Array<PlotPointDto | undefined>(bucketCount);
+  for (const point of points) {
+    const timestamp = Number.parseFloat(point.timestamp_host);
+    if (!Number.isFinite(timestamp)) {
+      continue;
+    }
+    const bucket = Math.max(
+      0,
+      Math.min(bucketCount - 1, Math.floor(((timestamp - bounds.minTime) / bounds.timeRange) * bucketCount)),
+    );
+    const minPoint = minPoints[bucket];
+    if (!minPoint || point.value < minPoint.value) {
+      minPoints[bucket] = point;
+    }
+    const maxPoint = maxPoints[bucket];
+    if (!maxPoint || point.value > maxPoint.value) {
+      maxPoints[bucket] = point;
+    }
+  }
+
+  const decimated: PlotPointDto[] = [];
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const minPoint = minPoints[bucket];
+    const maxPoint = maxPoints[bucket];
+    if (!minPoint || !maxPoint) {
+      continue;
+    }
+    if (minPoint === maxPoint) {
+      decimated.push(minPoint);
+    } else if (Number.parseFloat(minPoint.timestamp_host) <= Number.parseFloat(maxPoint.timestamp_host)) {
+      decimated.push(minPoint, maxPoint);
+    } else {
+      decimated.push(maxPoint, minPoint);
+    }
+  }
+  return decimated;
+}
+
 export function drawPlotCanvas(
   canvas: HTMLCanvasElement,
   seriesList: PlotSeries[],
   points: PlotPointDto[],
-) {
+): PlotCanvasStats {
+  const emptyStats = { rawPoints: 0, drawablePoints: 0, decimationMs: 0 };
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(1, Math.floor(rect.width));
@@ -109,7 +240,7 @@ export function drawPlotCanvas(
   }
   const context = canvas.getContext("2d");
   if (!context) {
-    return;
+    return emptyStats;
   }
 
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -145,17 +276,32 @@ export function drawPlotCanvas(
   context.lineTo(left + area.width, top + area.height);
   context.stroke();
 
-  const pointsBySeries = groupDrawablePointsBySeries(points);
-  const bounds = calculatePlotBounds(pointsBySeries);
+  const { pointsBySeries, bounds } = preparePlotData(points);
   if (!bounds) {
-    return;
+    return emptyStats;
   }
 
   context.lineWidth = 2;
   context.lineJoin = "round";
   context.lineCap = "round";
+  const decimationStartedAt = performance.now();
+  const decimatedBySeries = new Map<string, PlotPointDto[]>();
+  let rawPoints = 0;
+  let drawablePoints = 0;
   for (const series of seriesList) {
     const seriesPoints = pointsBySeries.get(series.id) ?? [];
+    rawPoints += seriesPoints.length;
+    if (seriesPoints.length === 0) {
+      continue;
+    }
+    const decimatedPoints = decimatePointsByPixelMinMax(seriesPoints, bounds, area);
+    drawablePoints += decimatedPoints.length;
+    decimatedBySeries.set(series.id, decimatedPoints);
+  }
+  const decimationMs = performance.now() - decimationStartedAt;
+
+  for (const series of seriesList) {
+    const seriesPoints = decimatedBySeries.get(series.id) ?? [];
     if (seriesPoints.length === 0) {
       continue;
     }
@@ -172,11 +318,14 @@ export function drawPlotCanvas(
       }
     }
     context.stroke();
-    context.fillStyle = series.color;
-    for (const point of projectedPoints) {
-      context.beginPath();
-      context.arc(point.x, point.y, 3, 0, Math.PI * 2);
-      context.fill();
+    if (projectedPoints.length <= plotMarkerThresholdPerSeries) {
+      context.fillStyle = series.color;
+      for (const point of projectedPoints) {
+        context.beginPath();
+        context.arc(point.x, point.y, 3, 0, Math.PI * 2);
+        context.fill();
+      }
     }
   }
+  return { rawPoints, drawablePoints, decimationMs };
 }

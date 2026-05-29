@@ -12,6 +12,8 @@ type PlotPerformance = {
   livePoints: number;
   canvasDrawMs: number;
   canvasPoints: number;
+  canvasRawPoints: number;
+  decimationMs: number;
 };
 
 type PlotterViewProps = {
@@ -264,8 +266,10 @@ export function PlotterView({
         <div className="plot-performance-panel">
           <span>Live request {plotPerformance.liveRequestMs.toFixed(1)}ms</span>
           <span>Live points {plotPerformance.livePoints}</span>
+          <span>Raw points {plotPerformance.canvasRawPoints}</span>
+          <span>Drawable {plotPerformance.canvasPoints}</span>
+          <span>Decimate {plotPerformance.decimationMs.toFixed(1)}ms</span>
           <span>Canvas draw {plotPerformance.canvasDrawMs.toFixed(1)}ms</span>
-          <span>Canvas points {plotPerformance.canvasPoints}</span>
         </div>
       </section>
     </section>

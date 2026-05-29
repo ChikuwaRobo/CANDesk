@@ -51,6 +51,8 @@ type PlotPerformance = {
   livePoints: number;
   canvasDrawMs: number;
   canvasPoints: number;
+  canvasRawPoints: number;
+  decimationMs: number;
 };
 
 export default function App() {
@@ -106,6 +108,8 @@ export default function App() {
     livePoints: 0,
     canvasDrawMs: 0,
     canvasPoints: 0,
+    canvasRawPoints: 0,
+    decimationMs: 0,
   });
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
@@ -592,7 +596,7 @@ export default function App() {
     seriesRef: plotSeriesRef,
     pointsRef: plotPointsRef,
     frameMs: plotRenderFrameMs,
-    onDraw: (canvasDrawMs, canvasPoints) => {
+    onDraw: (canvasDrawMs, canvasRawPoints, canvasPoints, decimationMs) => {
       const now = performance.now();
       if (now - lastPlotPerformanceUpdateRef.current < 500) {
         return;
@@ -601,7 +605,9 @@ export default function App() {
       setPlotPerformance((current) => ({
         ...current,
         canvasDrawMs,
+        canvasRawPoints,
         canvasPoints,
+        decimationMs,
       }));
     },
   });

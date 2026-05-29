@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PlotPointDto } from "../types";
 import {
   calculatePlotBounds,
+  decimatePointsByPixelMinMax,
   groupDrawablePointsBySeries,
   projectPlotPoints,
 } from "./plotCanvas";
@@ -83,7 +84,7 @@ describe("projectPlotPoints", () => {
     ]);
   });
 
-  it("limits dense series with a fixed stride", () => {
+  it("projects every point after decimation", () => {
     const bounds = {
       minTime: 0,
       maxTime: 9,
@@ -96,9 +97,45 @@ describe("projectPlotPoints", () => {
       Array.from({ length: 10 }, (_, index) => point("a", String(index), index)),
       bounds,
       { left: 0, top: 0, width: 90, height: 90 },
-      4,
     );
 
-    expect(projected.map(({ point }) => point.timestamp_host)).toEqual(["0", "3", "6", "9"]);
+    expect(projected.map(({ point }) => point.timestamp_host)).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+    ]);
+  });
+});
+
+describe("decimatePointsByPixelMinMax", () => {
+  it("preserves min and max in each pixel bucket", () => {
+    const bounds = {
+      minTime: 0,
+      maxTime: 10,
+      minValue: 0,
+      maxValue: 100,
+      timeRange: 10,
+      valueRange: 100,
+    };
+    const decimated = decimatePointsByPixelMinMax(
+      [
+        point("a", "0.1", 50),
+        point("a", "0.2", 10),
+        point("a", "0.3", 90),
+        point("a", "0.4", 60),
+        point("a", "6.0", 40),
+      ],
+      bounds,
+      { left: 0, top: 0, width: 2, height: 100 },
+    );
+
+    expect(decimated.map((sample) => sample.value)).toEqual([10, 90, 40]);
   });
 });

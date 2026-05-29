@@ -121,6 +121,8 @@ Live Plot の描画では、1 系列 1 点だけの初期状態でも見える�
 
 Plotter では大量の plot point をテキスト表として表示しない。履歴点は canvas 描画用に保持し、画面上のテキスト表示は選択 series の現在値だけにする。負荷確認用に Plotter 画面へ Live request 時間、Live points、Canvas draw 時間、Canvas points を表示する。2026-05-29 の browser preview ダミーデータ確認では、2 series 表示時に約 576 points の保持で Live request 0.0ms、Canvas draw 0.7ms 程度だった。
 
+Plotter canvas は高密度時に raw point を直接すべて描かず、描画時だけ pixel bucket の min/max envelope に変換する。元データは捨てず、canvas へ渡す点数だけを series あたり最大 400 点に抑える。2026-05-29 の browser benchmark では、10 series × 10,000 点、合計 100,000 点の合成データで、最適化前の目安が平均 3.5ms / p95 7.0ms、初期 min/max 実装が平均 23.2ms / p95 29.4ms、最終実装が平均 8.4ms / p95 10.3ms だった。通常の preview Live 4 series 条件では raw 3,600 点に対して drawable 1,252 点、Canvas draw 約 1.0ms を確認している。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

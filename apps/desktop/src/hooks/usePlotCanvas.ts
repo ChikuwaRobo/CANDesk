@@ -8,7 +8,7 @@ type UsePlotCanvasInput = {
   seriesRef: React.MutableRefObject<PlotSeries[]>;
   pointsRef: React.MutableRefObject<PlotPointDto[]>;
   frameMs: number;
-  onDraw?: (elapsedMs: number, pointCount: number) => void;
+  onDraw?: (elapsedMs: number, rawPointCount: number, drawablePointCount: number, decimationMs: number) => void;
 };
 
 export function usePlotCanvas({
@@ -31,8 +31,13 @@ export function usePlotCanvas({
         const canvas = canvasRef.current;
         if (canvas) {
           const startedAt = performance.now();
-          drawPlotCanvas(canvas, seriesRef.current, pointsRef.current);
-          onDraw?.(performance.now() - startedAt, pointsRef.current.length);
+          const stats = drawPlotCanvas(canvas, seriesRef.current, pointsRef.current);
+          onDraw?.(
+            performance.now() - startedAt,
+            stats.rawPoints,
+            stats.drawablePoints,
+            stats.decimationMs,
+          );
         }
         lastDrawAt = timestamp;
       }
