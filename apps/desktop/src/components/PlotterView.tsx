@@ -2,6 +2,18 @@ import { Activity, CirclePause, FileJson, LineChart, RefreshCw, SlidersHorizonta
 import type { RefObject } from "react";
 import type { PlotPointDto, PlotSeries } from "../types";
 
+type CurrentPlotValue = {
+  series: PlotSeries;
+  latestPoint?: PlotPointDto;
+};
+
+type PlotPerformance = {
+  liveRequestMs: number;
+  livePoints: number;
+  canvasDrawMs: number;
+  canvasPoints: number;
+};
+
 type PlotterViewProps = {
   plotLayoutName: string;
   plotLayoutPath: string;
@@ -13,8 +25,9 @@ type PlotterViewProps = {
   selectedSeriesPoints: PlotPointDto[];
   selectedPanelTitle: string;
   visiblePlotPoints: PlotPointDto[];
-  plotPointRows: PlotPointDto[];
-  plotPoints: PlotPointDto[];
+  currentPlotValues: CurrentPlotValue[];
+  hasPlotPoints: boolean;
+  plotPerformance: PlotPerformance;
   signalSampleCount: number;
   parsePreviewStatus: string;
   realtimePlot: boolean;
@@ -42,8 +55,9 @@ export function PlotterView({
   selectedSeriesPoints,
   selectedPanelTitle,
   visiblePlotPoints,
-  plotPointRows,
-  plotPoints,
+  currentPlotValues,
+  hasPlotPoints,
+  plotPerformance,
   signalSampleCount,
   parsePreviewStatus,
   realtimePlot,
@@ -229,32 +243,29 @@ export function PlotterView({
             ))}
           </div>
         </div>
-        <div className="preview-table-wrap">
-          <table className="preview-table">
-            <thead>
-              <tr>
-                <th>timestamp</th>
-                <th>panel</th>
-                <th>series</th>
-                <th>signal</th>
-                <th>value</th>
-                <th>unit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plotPointRows.map((point, index) => (
-                <tr key={`${point.panel_id}-${point.series_id}-${index}`}>
-                  <td>{point.timestamp_host}</td>
-                  <td>{point.panel_id}</td>
-                  <td>{point.series_id}</td>
-                  <td>{point.source_signal_id}</td>
-                  <td className="mono">{point.value.toFixed(3)}</td>
-                  <td>{point.unit}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {plotPoints.length === 0 ? <p className="empty-table">No plot points</p> : null}
+        <div className="current-values-panel">
+          <div className="panel-heading compact-heading">
+            <Activity size={16} />
+            <h3>Current Values</h3>
+          </div>
+          <div className="current-values-grid">
+            {currentPlotValues.map(({ series, latestPoint }) => (
+              <div className="current-value-card" key={series.id}>
+                <span style={{ borderColor: series.color }}>{series.label}</span>
+                <strong>{latestPoint ? latestPoint.value.toFixed(3) : "-"}</strong>
+                <small>
+                  {latestPoint?.unit || series.unit || "-"} / {latestPoint?.timestamp_host ?? "-"}
+                </small>
+              </div>
+            ))}
+          </div>
+          {!hasPlotPoints ? <p className="empty-table">No plot points</p> : null}
+        </div>
+        <div className="plot-performance-panel">
+          <span>Live request {plotPerformance.liveRequestMs.toFixed(1)}ms</span>
+          <span>Live points {plotPerformance.livePoints}</span>
+          <span>Canvas draw {plotPerformance.canvasDrawMs.toFixed(1)}ms</span>
+          <span>Canvas points {plotPerformance.canvasPoints}</span>
         </div>
       </section>
     </section>

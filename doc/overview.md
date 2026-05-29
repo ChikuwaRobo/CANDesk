@@ -119,6 +119,8 @@ Live Plot の描画では、1 系列 1 点だけの初期状態でも見える�
 
 2026-05-29 時点で、Tauri backend には Plotter 用 ring buffer と cursor 付き Live Plot API を追加済み。GUI Live は選択 series のみを API に渡し、browser preview のダミーデータでは 1 series / 2 series の切り替えに応じて描画点数が増えることを確認済み。実機確認は未実施。
 
+Plotter では大量の plot point をテキスト表として表示しない。履歴点は canvas 描画用に保持し、画面上のテキスト表示は選択 series の現在値だけにする。負荷確認用に Plotter 画面へ Live request 時間、Live points、Canvas draw 時間、Canvas points を表示する。2026-05-29 の browser preview ダミーデータ確認では、2 series 表示時に約 576 points の保持で Live request 0.0ms、Canvas draw 0.7ms 程度だった。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

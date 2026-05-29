@@ -729,6 +729,70 @@ label {
   border-radius: 50%;
 }
 
+.current-values-panel,
+.plot-performance-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #d9e1e3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.compact-heading {
+  margin-bottom: 10px;
+}
+
+.compact-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.current-values-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.current-value-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #e0e7e9;
+  border-radius: 8px;
+  background: #f8fbfc;
+}
+
+.current-value-card span {
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 4px solid #196b7a;
+  overflow: hidden;
+  color: #526169;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.current-value-card strong {
+  font-size: 20px;
+}
+
+.current-value-card small {
+  min-width: 0;
+  overflow: hidden;
+  color: #66747a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-performance-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  color: #526169;
+  font-size: 12px;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: 1fr 1.5fr 1.2fr 1.2fr;

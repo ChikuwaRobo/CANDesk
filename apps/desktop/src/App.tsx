@@ -45,7 +45,13 @@ import "./styles.css";
 
 const realtimePreviewIntervalMs = 100;
 const plotRenderFrameMs = 1000 / 60;
-const maxPreviewTableRows = 200;
+
+type PlotPerformance = {
+  liveRequestMs: number;
+  livePoints: number;
+  canvasDrawMs: number;
+  canvasPoints: number;
+};
 
 export default function App() {
   const client = React.useMemo(() => getCanRushClient(), []);
@@ -58,6 +64,7 @@ export default function App() {
   const realtimePlotTimerRef = React.useRef<number | null>(null);
   const realtimePlotInFlightRef = React.useRef(false);
   const livePlotCursorRef = React.useRef<number | null>(null);
+  const lastPlotPerformanceUpdateRef = React.useRef(0);
   const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
@@ -94,6 +101,12 @@ export default function App() {
   const [plotPoints, setPlotPoints] = React.useState<PlotPointDto[]>([]);
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
   const [realtimePlot, setRealtimePlot] = React.useState(false);
+  const [plotPerformance, setPlotPerformance] = React.useState<PlotPerformance>({
+    liveRequestMs: 0,
+    livePoints: 0,
+    canvasDrawMs: 0,
+    canvasPoints: 0,
+  });
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
 
@@ -126,11 +139,22 @@ export default function App() {
   const selectedSeriesPoints = visiblePlotPoints.filter(
     (point) => point.series_id === selectedSeries.id,
   );
-  const plotPointRows = visiblePlotPoints.slice(-maxPreviewTableRows);
+  const currentPlotValues = plotSeries
+    .filter((series) => visibleSeriesIds.includes(series.id))
+    .map((series) => {
+      let latestPoint: PlotPointDto | undefined;
+      for (let index = visiblePlotPoints.length - 1; index >= 0; index -= 1) {
+        if (visiblePlotPoints[index].series_id === series.id) {
+          latestPoint = visiblePlotPoints[index];
+          break;
+        }
+      }
+      return { series, latestPoint };
+    });
 
   React.useEffect(() => {
-    plotPointsRef.current = plotPoints;
-  }, [plotPoints]);
+    plotPointsRef.current = displayedPlotPoints;
+  }, [displayedPlotPoints]);
 
   React.useEffect(() => {
     plotSeriesRef.current = plotSeries;
@@ -410,14 +434,21 @@ export default function App() {
       }
       realtimePlotInFlightRef.current = true;
       try {
+        const requestStartedAt = performance.now();
         const preview = await client.parsePlotLiveSince({
           parserSignals: loadedSignals,
           plotSeries: loadedSeries,
           sinceSequence: livePlotCursorRef.current,
           selectedSeriesIds,
         });
+        const liveRequestMs = performance.now() - requestStartedAt;
         livePlotCursorRef.current = preview.next_sequence;
         appendLiveParsePlotPreview(preview);
+        setPlotPerformance((current) => ({
+          ...current,
+          liveRequestMs,
+          livePoints: preview.points.length,
+        }));
         setEventLog(
           client.isPreview
             ? "browser preview mode; live plot preview is simulated"
@@ -561,6 +592,18 @@ export default function App() {
     seriesRef: plotSeriesRef,
     pointsRef: plotPointsRef,
     frameMs: plotRenderFrameMs,
+    onDraw: (canvasDrawMs, canvasPoints) => {
+      const now = performance.now();
+      if (now - lastPlotPerformanceUpdateRef.current < 500) {
+        return;
+      }
+      lastPlotPerformanceUpdateRef.current = now;
+      setPlotPerformance((current) => ({
+        ...current,
+        canvasDrawMs,
+        canvasPoints,
+      }));
+    },
   });
 
   return (
@@ -632,8 +675,9 @@ export default function App() {
           selectedSeriesPoints={selectedSeriesPoints}
           selectedPanelTitle={selectedPanelTitle}
           visiblePlotPoints={visiblePlotPoints}
-          plotPointRows={plotPointRows}
-          plotPoints={plotPoints}
+          currentPlotValues={currentPlotValues}
+          hasPlotPoints={visiblePlotPoints.length > 0}
+          plotPerformance={plotPerformance}
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
           realtimePlot={realtimePlot}
