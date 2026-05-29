@@ -212,3 +212,8 @@ export type ParsePlotPreviewDto = {
   samples: SignalSampleDto[];
   points: PlotPointDto[];
 };
+
+export type ParsePlotLiveDto = ParsePlotPreviewDto & {
+  next_sequence: number;
+  dropped_frames: number;
+};

@@ -115,6 +115,10 @@ npm.cmd run tauri dev
 
 Live Plot の描画では、1 系列 1 点だけの初期状態でも見えるように canvas 上で線に加えて点マーカーを描く。Live は server の latest snapshot を周期的に読むため、GUI 表示用の plot point はポーリング時刻で刻んで履歴に追加する。これにより latest snapshot が同じ CAN ID 群だけを返す状態でも、時間軸上に値が積まれ、実ウィンドウで `Points` が増え続けることを確認できる。
 
+次の Plotter Live 改修では、上記の latest snapshot 方式を暫定実装として扱い、実受信 timestamp を持つ時系列 ring buffer 方式へ変更する。CAN 受信データ自体は間引かず、描画更新だけを最大 60fps に制限する。軽量化のため、Live Plot の parse / plot 対象は GUI で選択された series のみに限定する。詳細な作業順は `doc/refactoring-plan.md` の Phase 11 に残す。
+
+2026-05-29 時点で、Tauri backend には Plotter 用 ring buffer と cursor 付き Live Plot API を追加済み。GUI Live は選択 series のみを API に渡し、browser preview のダミーデータでは 1 series / 2 series の切り替えに応じて描画点数が増えることを確認済み。実機確認は未実施。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

@@ -570,18 +570,42 @@ label {
   margin-top: 12px;
 }
 
+.series-list-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: stretch;
+  border: 1px solid #d3dde1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.series-list-row.selected {
+  border-color: #196b7a;
+  background: #dcecf7;
+}
+
+.series-visibility {
+  display: grid;
+  place-items: center;
+  min-height: 54px;
+  cursor: pointer;
+}
+
+.series-visibility input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .signal-list button {
   display: grid;
   justify-content: stretch;
   gap: 3px;
   min-height: 54px;
   padding: 8px 10px;
+  border: 0;
+  background: transparent;
   text-align: left;
-}
-
-.signal-list button.selected {
-  border-color: #196b7a;
-  background: #dcecf7;
 }
 
 .signal-list span,

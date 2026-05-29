@@ -89,6 +89,7 @@ pub(crate) fn disconnect_all(state: tauri::State<'_, ReceiverState>) -> Result<(
 pub(crate) fn clear_latest(state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
     inner.latest = LatestFrameState::default();
+    inner.plot_history.clear();
     inner.event_log = "latest frame view cleared".to_string();
     Ok(())
 }

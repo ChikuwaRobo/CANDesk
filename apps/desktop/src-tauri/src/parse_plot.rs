@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use canrush_core::parser::{parse_capture_csv_file, parse_frame, ParseConfig};
 use canrush_core::plot::{build_plot_points, PlotLayout};
 
-use crate::dto::ParsePlotPreviewDto;
+use crate::dto::{ParsePlotLiveDto, ParsePlotLiveRequestDto, ParsePlotPreviewDto};
 use crate::path::{read_json_file, resolve_existing_path};
 use crate::{ReceiverInner, ReceiverState};
 
@@ -45,6 +45,14 @@ pub(crate) fn parse_plot_preview_live(
     state: tauri::State<'_, ReceiverState>,
 ) -> Result<ParsePlotPreviewDto, String> {
     parse_plot_preview_live_for_state(&state.inner)
+}
+
+#[tauri::command]
+pub(crate) fn parse_plot_live_since(
+    state: tauri::State<'_, ReceiverState>,
+    request: ParsePlotLiveRequestDto,
+) -> Result<ParsePlotLiveDto, String> {
+    parse_plot_live_since_for_state(&state.inner, request)
 }
 
 #[tauri::command]
@@ -104,6 +112,96 @@ pub(crate) fn parse_plot_preview_live_for_state(
         (config, layout)
     };
     parse_plot_preview_from_config_for_state(shared, &config, &layout)
+}
+
+pub(crate) fn parse_plot_live_since_for_state(
+    shared: &Arc<Mutex<ReceiverInner>>,
+    request: ParsePlotLiveRequestDto,
+) -> Result<ParsePlotLiveDto, String> {
+    let (config, layout, frames, next_sequence, oldest_sequence) = {
+        let inner = shared.lock().map_err(|error| error.to_string())?;
+        let config = inner
+            .parse_config
+            .clone()
+            .ok_or_else(|| "parse config is not loaded".to_string())?;
+        let layout = inner
+            .plot_layout
+            .clone()
+            .ok_or_else(|| "plot layout is not loaded".to_string())?;
+        let oldest_sequence = inner
+            .plot_history
+            .since(None)
+            .0
+            .first()
+            .map(|entry| entry.sequence)
+            .unwrap_or(0);
+        let (frames, next_sequence) = inner.plot_history.since(request.since_sequence);
+        (config, layout, frames, next_sequence, oldest_sequence)
+    };
+    let selected_layout = select_plot_layout(&layout, &request.selected_series_ids);
+    let selected_signal_ids = selected_layout
+        .panels
+        .iter()
+        .flat_map(|panel| panel.series.iter().map(|series| series.signal_id.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let samples = frames
+        .iter()
+        .flat_map(|entry| parse_frame(&config, &entry.frame, entry.sequence))
+        .filter(|sample| selected_signal_ids.contains(sample.signal_id.as_str()))
+        .collect::<Vec<_>>();
+    let points = build_plot_points(&selected_layout, &samples);
+    let dropped_frames = request
+        .since_sequence
+        .filter(|since| oldest_sequence > 0 && *since + 1 < oldest_sequence)
+        .map(|since| oldest_sequence.saturating_sub(since + 1))
+        .unwrap_or(0);
+    Ok(ParsePlotLiveDto {
+        samples,
+        points,
+        next_sequence,
+        dropped_frames,
+    })
+}
+
+fn select_plot_layout(layout: &PlotLayout, selected_series_ids: &[String]) -> PlotLayout {
+    if selected_series_ids.is_empty() {
+        return PlotLayout {
+            version: layout.version,
+            name: layout.name.clone(),
+            description: layout.description.clone(),
+            panels: Vec::new(),
+        };
+    }
+    let selected = selected_series_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    PlotLayout {
+        version: layout.version,
+        name: layout.name.clone(),
+        description: layout.description.clone(),
+        panels: layout
+            .panels
+            .iter()
+            .filter_map(|panel| {
+                let series = panel
+                    .series
+                    .iter()
+                    .filter(|series| selected.contains(series.id.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if series.is_empty() {
+                    None
+                } else {
+                    Some(canrush_core::plot::PlotPanel {
+                        id: panel.id.clone(),
+                        title: panel.title.clone(),
+                        series,
+                    })
+                }
+            })
+            .collect(),
+    }
 }
 
 fn parse_plot_preview_from_config_for_state(
@@ -192,6 +290,59 @@ mod tests {
     }
 
     #[test]
+    fn parse_plot_live_since_uses_history_cursor_and_selected_series() {
+        let state = state_with_orion_frame();
+        {
+            let mut inner = match state.inner.lock() {
+                Ok(inner) => inner,
+                Err(error) => panic!("failed to lock receiver state: {error}"),
+            };
+            inner.parse_config = Some(
+                match read_json_file::<ParseConfig>("examples/orion.canrush-parse.json") {
+                    Ok(config) => config,
+                    Err(error) => panic!("failed to load parse config: {error}"),
+                },
+            );
+            inner.plot_layout = Some(
+                match read_json_file::<PlotLayout>("examples/orion.canrush-layout.json") {
+                    Ok(layout) => layout,
+                    Err(error) => panic!("failed to load plot layout: {error}"),
+                },
+            );
+        }
+
+        let preview = match parse_plot_live_since_for_state(
+            &state.inner,
+            ParsePlotLiveRequestDto {
+                since_sequence: None,
+                selected_series_ids: vec!["motor0_rps".to_string()],
+            },
+        ) {
+            Ok(preview) => preview,
+            Err(error) => panic!("failed to build live plot history: {error}"),
+        };
+
+        assert_eq!(preview.samples.len(), 1);
+        assert_eq!(preview.points.len(), 1);
+        assert_eq!(preview.points[0].series_id, "motor0_rps");
+        assert_eq!(preview.next_sequence, 1);
+
+        let empty = match parse_plot_live_since_for_state(
+            &state.inner,
+            ParsePlotLiveRequestDto {
+                since_sequence: Some(preview.next_sequence),
+                selected_series_ids: vec!["motor0_rps".to_string()],
+            },
+        ) {
+            Ok(preview) => preview,
+            Err(error) => panic!("failed to build live plot history: {error}"),
+        };
+
+        assert!(empty.points.is_empty());
+        assert_eq!(empty.next_sequence, preview.next_sequence);
+    }
+
+    #[test]
     fn parse_plot_capture_file_uses_loaded_config_and_sample_capture() {
         let preview = match parse_plot_capture_file_from_paths(
             "examples/orion.canrush-parse.json",
@@ -234,7 +385,8 @@ mod tests {
                 Ok(frame) => frame,
                 Err(error) => panic!("failed to build test frame: {error}"),
             };
-            inner.latest.ingest(frame);
+            inner.latest.ingest(frame.clone());
+            inner.plot_history.push(frame);
         }
         state
     }

@@ -74,3 +74,17 @@ pub(crate) struct ParsePlotPreviewDto {
     pub(crate) samples: Vec<SignalSample>,
     pub(crate) points: Vec<PlotPoint>,
 }
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ParsePlotLiveRequestDto {
+    pub(crate) since_sequence: Option<u64>,
+    pub(crate) selected_series_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ParsePlotLiveDto {
+    pub(crate) samples: Vec<SignalSample>,
+    pub(crate) points: Vec<PlotPoint>,
+    pub(crate) next_sequence: u64,
+    pub(crate) dropped_frames: u64,
+}

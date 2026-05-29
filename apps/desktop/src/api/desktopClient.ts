@@ -3,10 +3,12 @@ import type {
   CanRushClient,
   ConnectBusInput,
   ParsePlotCaptureFileInput,
+  ParsePlotLiveInput,
   ParsePlotPreviewInput,
 } from "./types";
 import type {
   ParseConfigDto,
+  ParsePlotLiveDto,
   ParsePlotPreviewDto,
   PlotLayoutDto,
   SerialPortInfo,
@@ -62,6 +64,15 @@ export const desktopClient: CanRushClient = {
 
   parsePlotPreviewLive() {
     return invoke<ParsePlotPreviewDto>("parse_plot_preview_live");
+  },
+
+  parsePlotLiveSince(input: ParsePlotLiveInput) {
+    return invoke<ParsePlotLiveDto>("parse_plot_live_since", {
+      request: {
+        since_sequence: input.sinceSequence,
+        selected_series_ids: input.selectedSeriesIds,
+      },
+    });
   },
 
   parsePlotCaptureFile(input: ParsePlotCaptureFileInput) {

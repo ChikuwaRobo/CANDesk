@@ -51,7 +51,7 @@ test("plotter live preview draws points in headless browser mode", async ({ page
   await page.getByRole("button", { name: "Live" }).click();
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(page.getByLabel("plotter workspace")).toContainText("running");
-  await expect(page.getByLabel("plotter workspace")).toContainText(/4 sample\(s\), 4 point\(s\) live/);
+  await expect(page.getByLabel("plotter workspace")).toContainText(/12 sample\(s\), 12 point\(s\) live/);
   await expect(page.getByText(/last 10s \/ [1-9]\d* point\(s\)/)).toBeVisible();
   await expect(page.getByText(/last 10s \/ ([5-9]|\d{2,}) point\(s\)/)).toBeVisible();
   await expect
@@ -76,6 +76,10 @@ test("plotter live preview draws points in headless browser mode", async ({ page
       }),
     )
     .toBeGreaterThan(0);
+
+  await page.getByRole("checkbox").nth(1).check();
+  await expect(page.getByLabel("plotter workspace")).toContainText("Selected points");
+  await expect(page.getByText(/last 10s \/ ([1-9]\d{2,}|\d{4,}) point\(s\)/)).toBeVisible();
 });
 
 test("plotter csv preview can be cleared headlessly", async ({ page }) => {

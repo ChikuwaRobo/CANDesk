@@ -7,10 +7,12 @@ import {
 import { sampleSignalValue } from "../lib/parserMapping";
 import type {
   CanRushClient,
+  ParsePlotLiveInput,
   PreviewParsePlotInput,
 } from "./types";
 import type {
   ParseConfigDto,
+  ParsePlotLiveDto,
   ParsePlotPreviewDto,
   PlotLayoutDto,
   PlotPointDto,
@@ -18,6 +20,7 @@ import type {
 } from "../types";
 
 const realtimePreviewIntervalMs = 100;
+const previewLiveBatchSize = 12;
 
 function previewParseConfig(name: string): ParseConfigDto {
   return {
@@ -111,6 +114,56 @@ function makePreviewParsePlot(
   return { samples, points };
 }
 
+function makePreviewLiveSince(input: ParsePlotLiveInput): ParsePlotLiveDto {
+  const startSequence = input.sinceSequence ?? Math.floor(Date.now() / realtimePreviewIntervalMs);
+  const selectedSeries = input.plotSeries.filter((series) =>
+    input.selectedSeriesIds.includes(series.id),
+  );
+  const samples: SignalSampleDto[] = [];
+  const points: PlotPointDto[] = [];
+  for (let batchIndex = 1; batchIndex <= previewLiveBatchSize; batchIndex += 1) {
+    const sequence = startSequence + batchIndex;
+    const timestamp = ((Date.now() - (previewLiveBatchSize - batchIndex) * 8) / 1000).toFixed(3);
+    for (const series of selectedSeries) {
+      const signal = input.parserSignals.find((candidate) => candidate.id === series.signalId);
+      if (!signal) {
+        continue;
+      }
+      const signalIndex = input.parserSignals.indexOf(signal);
+      const base = sampleSignalValue(signal, signalIndex);
+      const value = base + Math.sin(sequence / 5 + signalIndex * 0.6) * Math.max(1, Math.abs(base) * 0.05);
+      samples.push({
+        timestamp_host: timestamp,
+        bus: signal.bus,
+        frame_id: signal.canId,
+        signal_id: signal.id,
+        name: signal.name,
+        value,
+        unit: signal.unit,
+        quality: "ok",
+        source_sequence: sequence,
+      });
+      points.push({
+        timestamp_host: timestamp,
+        panel_id: series.panelId,
+        series_id: series.id,
+        source_signal_id: series.signalId,
+        name: series.label,
+        value,
+        unit: series.unit,
+        quality: "ok",
+        source_sequence: sequence,
+      });
+    }
+  }
+  return {
+    samples,
+    points,
+    next_sequence: startSequence + previewLiveBatchSize,
+    dropped_frames: 0,
+  };
+}
+
 export const previewClient: CanRushClient = {
   isPreview: true,
 
@@ -154,6 +207,10 @@ export const previewClient: CanRushClient = {
     const timestamp = (Date.now() / 1000).toFixed(3);
     const sequence = Math.floor(Date.now() / realtimePreviewIntervalMs);
     return makePreviewParsePlot(input, "ok", timestamp, sequence);
+  },
+
+  async parsePlotLiveSince(input: ParsePlotLiveInput) {
+    return makePreviewLiveSince(input);
   },
 
   async parsePlotCaptureFile(input: PreviewParsePlotInput) {

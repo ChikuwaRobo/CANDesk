@@ -99,6 +99,7 @@ fn main() {
             parse_plot::load_plot_layout,
             parse_plot::parse_plot_preview,
             parse_plot::parse_plot_preview_live,
+            parse_plot::parse_plot_live_since,
             parse_plot::parse_plot_capture_file,
         ])
         .run(tauri::generate_context!())

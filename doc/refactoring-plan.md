@@ -424,3 +424,95 @@ npm.cmd run test:smoke
 - frontend と backend の大きな単一ファイルが解消している。
 - 基本動作は headless test で確認できる。
 - 新しい GUI 変更時に触るべき module が予測できる。
+
+## Phase 11: Plotter Live を時系列バッファ方式へ変更
+
+状態: 2026-05-29 一部完了。Tauri backend に Plotter 用 ring buffer と cursor 付き Live Plot API を追加し、GUI は選択 series のみを Live Plot 対象にするよう変更済み。実機なし環境では browser preview のダミー Live データで GUI 操作確認済み。
+
+目的: Live Plot を `latest` snapshot 方式から、実受信 timestamp を持つ時系列データ方式に変更する。CAN 受信データ自体は間引かず、描画だけを最大 60fps に抑える。軽量化のため、parse / plot 対象は GUI で選択された series のみに限定する。
+
+設計方針:
+
+- Monitor 表示は従来通り `LatestFrameState` を使う。
+- Plotter Live は `latest.values()` を使わず、Tauri backend に追加する plot 用 ring buffer を読む。
+- backend は WebSocket stream で受信した frame を、単調増加 sequence と実受信 timestamp 付きで ring buffer に保存する。
+- frontend は `sinceSequence` cursor を保持し、前回取得以降の frame だけを Live API から受け取る。
+- GUI 側で timestamp を `Date.now()` に打ち直さない。plot point の時刻は CAN frame の実受信 timestamp を使う。
+- データは保存時点では集約しない。将来必要になった場合のみ、描画時に pixel column 単位の min / max 集約を検討する。
+
+作業:
+
+1. `ReceiverInner` に plot 用 ring buffer と次 sequence を追加する。完了。
+2. `stream.rs` の frame ingest 時に、`latest` 更新に加えて ring buffer に frame を append する。完了。
+3. ring buffer の上限を決める。初期値は時間ではなく frame 件数上限とし、GUI 側の表示窓 10 秒に対して余裕を持たせる。完了。初期上限は 120,000 frame。
+4. `dto.rs` に Live Plot 用 request / response DTO を追加する。完了。
+   - request: `since_sequence`, `selected_series_ids`
+   - response: `points`, `next_sequence`, `dropped_frames`
+5. `parse_plot.rs` に cursor 付き Live Plot command を追加する。完了。
+   - cached parse config / plot layout を使う。
+   - selected series に必要な signal だけを対象にする。
+   - `since_sequence` 以降の frame を parse し、plot point を返す。
+6. `desktopClient.ts` / `previewClient.ts` / `api/types.ts` に新 API を追加する。完了。
+7. `App.tsx` で Live Plot cursor を管理する。完了。
+   - Live start / clear / selected series 変更時に cursor と plot 履歴をリセットする。
+   - 取得した point は実 timestamp のまま append する。
+8. `PlotterView.tsx` に表示対象 series のチェック UI を追加する。完了。
+   - 初期 ON は先頭 series のみ。
+   - 詳細表示用の selected series と、描画対象 selected series ids は別 state にする。
+   - Live 中の選択変更では履歴をクリアして Live を継続または再開始する。
+9. canvas 描画は `requestAnimationFrame` を使い、最大 60fps にする。完了。
+   - 保存済み plot point は捨てない。
+   - 描画時だけ `maxCanvasPointsPerSeries` でストライド間引きを行う。
+10. 旧 `parse_plot_preview_live` の latest snapshot 依存を削除するか、preview / debug 専用として明示的に隔離する。未完了。現時点では互換用に残し、GUI Live は新 API を使用する。
+
+触るファイル:
+
+- `apps/desktop/src-tauri/src/state.rs`
+- `apps/desktop/src-tauri/src/stream.rs`
+- `apps/desktop/src-tauri/src/dto.rs`
+- `apps/desktop/src-tauri/src/parse_plot.rs`
+- `apps/desktop/src-tauri/src/commands.rs`
+- `apps/desktop/src/api/types.ts`
+- `apps/desktop/src/api/desktopClient.ts`
+- `apps/desktop/src/api/previewClient.ts`
+- `apps/desktop/src/App.tsx`
+- `apps/desktop/src/components/PlotterView.tsx`
+- `apps/desktop/src/lib/plotHistory.ts`
+- `apps/desktop/src/lib/plotCanvas.ts`
+- `apps/desktop/tests/smoke.spec.ts`
+
+検証:
+
+```powershell
+cargo test -p canrush-desktop
+cd apps\desktop
+npm.cmd run test:unit
+npm.cmd run build
+npm.cmd run test:smoke
+```
+
+実機確認:
+
+```powershell
+cd apps\desktop
+npm.cmd run tauri dev
+```
+
+確認手順:
+
+1. GUI を起動し、server が自動起動または既存 server に接続されることを確認する。
+2. Monitor で COM3 / COM85 の受信が継続していることを確認する。
+3. Plotter で parse config / plot layout を読み込む。
+4. 表示対象 series を 1 つだけ ON にする。
+5. Live を開始し、`Points` が実受信に応じて増えることを確認する。
+6. 表示対象 series を切り替え、履歴がリセットされ、新しい series の点だけが描画されることを確認する。
+7. 10 秒程度動かして、GUI 操作が重くならないことを確認する。
+
+完了条件:
+
+- Live Plot が `latest.values()` ではなく時系列 ring buffer を入力にしている。
+- 60Hz 以下のデータは受信 timestamp 通りの点として表示される。
+- CAN 受信データ自体は Live Plot のために間引かれていない。
+- 描画更新は最大 60fps に制限されている。
+- 選択されていない series は parse / plot 対象にならない。
+- headless smoke と実ウィンドウ確認の両方で、選択 series の Live Plot が描画される。

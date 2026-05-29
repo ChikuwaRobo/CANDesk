@@ -83,7 +83,8 @@ fn handle_stream_message(shared: &Arc<Mutex<ReceiverInner>>, message: Message) {
             Ok(event) => match frame_from_event(event) {
                 Ok(frame) => {
                     if let Ok(mut inner) = shared.lock() {
-                        inner.latest.ingest(frame);
+                        inner.latest.ingest(frame.clone());
+                        inner.plot_history.push(frame);
                     }
                 }
                 Err(error) => update_stream_log(shared, format!("frame decode failed: {error}")),

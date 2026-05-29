@@ -9,6 +9,7 @@ type PlotterViewProps = {
   plotSeries: PlotSeries[];
   selectedSeries: PlotSeries;
   selectedSeriesId: string;
+  visibleSeriesIds: string[];
   selectedSeriesPoints: PlotPointDto[];
   selectedPanelTitle: string;
   visiblePlotPoints: PlotPointDto[];
@@ -27,6 +28,7 @@ type PlotterViewProps = {
   onToggleRealtimePlot: () => void;
   onClearPlot: () => void;
   onSelectedSeriesChange: (id: string) => void;
+  onVisibleSeriesToggle: (id: string) => void;
 };
 
 export function PlotterView({
@@ -36,6 +38,7 @@ export function PlotterView({
   plotSeries,
   selectedSeries,
   selectedSeriesId,
+  visibleSeriesIds,
   selectedSeriesPoints,
   selectedPanelTitle,
   visiblePlotPoints,
@@ -54,6 +57,7 @@ export function PlotterView({
   onToggleRealtimePlot,
   onClearPlot,
   onSelectedSeriesChange,
+  onVisibleSeriesToggle,
 }: PlotterViewProps) {
   return (
     <section className="plotter-workspace" aria-label="plotter workspace">
@@ -119,17 +123,25 @@ export function PlotterView({
         </button>
         <div className="signal-list">
           {plotSeries.map((series) => (
-            <button
-              type="button"
+            <div
               key={series.id}
-              className={selectedSeriesId === series.id ? "selected" : ""}
-              onClick={() => onSelectedSeriesChange(series.id)}
+              className={`series-list-row${selectedSeriesId === series.id ? " selected" : ""}`}
             >
-              <span>{series.label}</span>
-              <strong>
-                {series.panelId} / {series.signalId}
-              </strong>
-            </button>
+              <label className="series-visibility">
+                <input
+                  type="checkbox"
+                  checked={visibleSeriesIds.includes(series.id)}
+                  onChange={() => onVisibleSeriesToggle(series.id)}
+                />
+                <span />
+              </label>
+              <button type="button" onClick={() => onSelectedSeriesChange(series.id)}>
+                <span>{series.label}</span>
+                <strong>
+                  {series.panelId} / {series.signalId}
+                </strong>
+              </button>
+            </div>
           ))}
         </div>
       </aside>

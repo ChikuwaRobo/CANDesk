@@ -1,6 +1,7 @@
 import type {
   BusConfig,
   ParseConfigDto,
+  ParsePlotLiveDto,
   ParsePlotPreviewDto,
   PlotLayoutDto,
   SerialPortInfo,
@@ -29,6 +30,11 @@ export type PreviewParsePlotInput = {
   plotSeries: PlotSeries[];
 };
 
+export type ParsePlotLiveInput = PreviewParsePlotInput & {
+  sinceSequence: number | null;
+  selectedSeriesIds: string[];
+};
+
 export type CanRushClient = {
   isPreview: boolean;
   listSerialPorts(): Promise<SerialPortInfo[]>;
@@ -40,6 +46,7 @@ export type CanRushClient = {
   loadPlotLayout(path: string): Promise<PlotLayoutDto>;
   parsePlotPreview(input: ParsePlotPreviewInput & PreviewParsePlotInput): Promise<ParsePlotPreviewDto>;
   parsePlotPreviewLive(input: PreviewParsePlotInput): Promise<ParsePlotPreviewDto>;
+  parsePlotLiveSince(input: ParsePlotLiveInput): Promise<ParsePlotLiveDto>;
   parsePlotCaptureFile(input: ParsePlotCaptureFileInput & PreviewParsePlotInput): Promise<ParsePlotPreviewDto>;
   latestSnapshot(): Promise<SnapshotDto>;
 };
