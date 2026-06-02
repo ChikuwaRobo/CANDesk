@@ -121,6 +121,8 @@ npm.cmd run tauri dev
 
 Plotter は画面表示時に parse config と plot layout を自動で読み込み、選択 series を対象に live parse API のポーリングを自動開始する。現在値確認 UI の更新周期は 50ms、理論上の上限は約 20Hz とする。API 呼び出しが処理中の場合は多重呼び出しせず次回周期へ送る。Series 色は 4x4 の固定パレットからスウォッチ付きドロップダウンで選ぶ。
 
+Plotter には暫定のパフォーマンスメトリクスを表示する。Poll は live parse polling の実周期、API は `parsePlotLiveSince` の平均応答時間、Commit は state 更新要求から次の animation frame までの平均時間、Samples は 1 poll あたりの受信 sample 数、FPS は `requestAnimationFrame` ベースの画面更新目安、Dropped は API が返す dropped frame 数を示す。preview 環境のヘッドレス計測では 1 series 選択時に Poll 約 58ms、Commit 約 10～12ms、FPS 約 60、4 series 選択時に Poll 約 56～60ms、Commit 約 9～12ms、FPS 約 60 だった。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

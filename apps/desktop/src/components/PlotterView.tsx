@@ -1,5 +1,6 @@
 import { Check, ChevronDown, LineChart, Radio } from "lucide-react";
 import { plotColorPalette } from "../lib/plotColors";
+import type { PlotterPerfStats } from "../App";
 import type { PlotSeries, SignalSampleDto } from "../types";
 
 type CurrentValue = {
@@ -15,6 +16,7 @@ type PlotterViewProps = {
   visibleSeriesIds: string[];
   currentValues: CurrentValue[];
   valuesRunning: boolean;
+  perfStats: PlotterPerfStats | null;
   signalSampleCount: number;
   parsePreviewStatus: string;
   onPlotLayoutPathChange: (value: string) => void;
@@ -31,6 +33,7 @@ export function PlotterView({
   visibleSeriesIds,
   currentValues,
   valuesRunning,
+  perfStats,
   signalSampleCount,
   parsePreviewStatus,
   onPlotLayoutPathChange,
@@ -59,6 +62,34 @@ export function PlotterView({
             <strong>{valuesRunning ? parsePreviewStatus : "starting"}</strong>
           </div>
         </div>
+        {perfStats ? (
+          <div className="plotter-perf-metrics" aria-label="plotter performance">
+            <div>
+              <span>Poll</span>
+              <strong>{perfStats.pollIntervalMs.toFixed(1)} ms</strong>
+            </div>
+            <div>
+              <span>API</span>
+              <strong>{perfStats.apiMs.toFixed(1)} ms</strong>
+            </div>
+            <div>
+              <span>Commit</span>
+              <strong>{perfStats.commitMs.toFixed(1)} ms</strong>
+            </div>
+            <div>
+              <span>Samples</span>
+              <strong>{perfStats.samplesPerPoll.toFixed(1)}</strong>
+            </div>
+            <div>
+              <span>FPS</span>
+              <strong>{perfStats.renderFps.toFixed(1)}</strong>
+            </div>
+            <div>
+              <span>Dropped</span>
+              <strong>{perfStats.droppedFrames}</strong>
+            </div>
+          </div>
+        ) : null}
 
         <section className="plot-settings-section">
           <h3>General</h3>

@@ -34,6 +34,15 @@ import { useDummyFrames } from "./hooks/useDummyFrames";
 import { useSnapshotPolling } from "./hooks/useSnapshotPolling";
 import "./styles.css";
 
+export type PlotterPerfStats = {
+  pollIntervalMs: number;
+  apiMs: number;
+  commitMs: number;
+  samplesPerPoll: number;
+  droppedFrames: number;
+  renderFps: number;
+};
+
 export default function App() {
   const client = React.useMemo(() => getCanRushClient(), []);
   const signalSampleKeysRef = React.useRef(new Set<string>());
@@ -41,6 +50,20 @@ export default function App() {
   const plotterLiveInFlightRef = React.useRef(false);
   const plotterLiveCursorRef = React.useRef<number | null>(null);
   const plotterAutoStartRef = React.useRef(false);
+  const plotterPerfRef = React.useRef({
+    lastPollStartedAt: 0,
+    lastReportAt: 0,
+    pollCount: 0,
+    intervalMsTotal: 0,
+    apiMsTotal: 0,
+    commitMsTotal: 0,
+    commitCount: 0,
+    samplesTotal: 0,
+    droppedFramesTotal: 0,
+    rafStartedAt: 0,
+    rafFrames: 0,
+    renderFps: 0,
+  });
   const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
@@ -76,6 +99,7 @@ export default function App() {
   const [signalSamples, setSignalSamples] = React.useState<SignalSampleDto[]>([]);
   const [plotterCurrentSamples, setPlotterCurrentSamples] = React.useState<Record<string, SignalSampleDto>>({});
   const [plotterValuesRunning, setPlotterValuesRunning] = React.useState(false);
+  const [plotterPerfStats, setPlotterPerfStats] = React.useState<PlotterPerfStats | null>(null);
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
@@ -128,20 +152,32 @@ export default function App() {
     }
 
     const refresh = async () => {
+      const pollStartedAt = performance.now();
+      const perf = plotterPerfRef.current;
+      if (perf.lastPollStartedAt > 0) {
+        perf.intervalMsTotal += pollStartedAt - perf.lastPollStartedAt;
+      }
+      perf.lastPollStartedAt = pollStartedAt;
+      perf.pollCount += 1;
       if (plotterLiveInFlightRef.current) {
         plotterLiveTimerRef.current = window.setTimeout(refresh, 50);
         return;
       }
       plotterLiveInFlightRef.current = true;
       try {
+        const apiStartedAt = performance.now();
         const preview = await client.parsePlotLiveSince({
           parserSignals,
           plotSeries,
           sinceSequence: plotterLiveCursorRef.current,
           selectedSeriesIds: visibleSeriesIds,
         });
+        perf.apiMsTotal += performance.now() - apiStartedAt;
+        perf.samplesTotal += preview.samples.length;
+        perf.droppedFramesTotal += preview.dropped_frames;
         plotterLiveCursorRef.current = preview.next_sequence;
         if (preview.samples.length > 0) {
+          const updateStartedAt = performance.now();
           setPlotterCurrentSamples((current) => {
             const next = { ...current };
             for (const sample of preview.samples) {
@@ -150,6 +186,10 @@ export default function App() {
             return next;
           });
           setSignalSamples(preview.samples);
+          window.requestAnimationFrame(() => {
+            perf.commitMsTotal += performance.now() - updateStartedAt;
+            perf.commitCount += 1;
+          });
         }
         setParsePreviewStatus(
           `${preview.samples.length} sample(s), ${preview.points.length} point(s) live`,
@@ -157,6 +197,25 @@ export default function App() {
       } catch (error) {
         setEventLog(`plotter value refresh failed: ${String(error)}`);
       } finally {
+        const now = performance.now();
+        if (now - perf.lastReportAt >= 1000 && perf.pollCount > 0) {
+          setPlotterPerfStats({
+            pollIntervalMs: perf.intervalMsTotal / Math.max(1, perf.pollCount - 1),
+            apiMs: perf.apiMsTotal / perf.pollCount,
+            commitMs: perf.commitCount > 0 ? perf.commitMsTotal / perf.commitCount : 0,
+            samplesPerPoll: perf.samplesTotal / perf.pollCount,
+            droppedFrames: perf.droppedFramesTotal,
+            renderFps: perf.renderFps,
+          });
+          perf.lastReportAt = now;
+          perf.pollCount = 0;
+          perf.intervalMsTotal = 0;
+          perf.apiMsTotal = 0;
+          perf.commitMsTotal = 0;
+          perf.commitCount = 0;
+          perf.samplesTotal = 0;
+          perf.droppedFramesTotal = 0;
+        }
         plotterLiveInFlightRef.current = false;
         plotterLiveTimerRef.current = window.setTimeout(refresh, 50);
       }
@@ -171,6 +230,35 @@ export default function App() {
       plotterLiveInFlightRef.current = false;
     };
   }, [client, parserSignals, plotSeries, plotterValuesRunning, visibleSeriesIds, workspaceView]);
+
+  React.useEffect(() => {
+    if (workspaceView !== "plotter") {
+      return undefined;
+    }
+    let rafId = 0;
+    const measureFrameRate = (now: number) => {
+      const perf = plotterPerfRef.current;
+      if (perf.rafStartedAt === 0) {
+        perf.rafStartedAt = now;
+      }
+      perf.rafFrames += 1;
+      const elapsedMs = now - perf.rafStartedAt;
+      if (elapsedMs >= 1000) {
+        perf.renderFps = (perf.rafFrames * 1000) / elapsedMs;
+        perf.rafStartedAt = now;
+        perf.rafFrames = 0;
+      }
+      rafId = window.requestAnimationFrame(measureFrameRate);
+    };
+    rafId = window.requestAnimationFrame(measureFrameRate);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      const perf = plotterPerfRef.current;
+      perf.rafStartedAt = 0;
+      perf.rafFrames = 0;
+      perf.renderFps = 0;
+    };
+  }, [workspaceView]);
 
   async function refreshPorts() {
     try {
@@ -518,6 +606,7 @@ export default function App() {
           visibleSeriesIds={visibleSeriesIds}
           currentValues={selectedPlotterValues}
           valuesRunning={plotterValuesRunning}
+          perfStats={plotterPerfStats}
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
           onPlotLayoutPathChange={setPlotLayoutPath}

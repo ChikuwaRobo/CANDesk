@@ -63,5 +63,7 @@ test("plotter layout can be loaded and series can be selected headlessly", async
   await page.getByRole("button", { name: "Motor0 angle orion_motor0_angle_rad" }).click();
   await expect(page.getByLabel("plotter workspace")).toContainText("orion_motor0_angle_rad");
   await expect(page.getByLabel("plotter workspace")).toContainText("Current Values");
+  await expect(page.getByLabel("plotter performance")).toContainText("Poll");
+  await expect(page.getByLabel("plotter performance")).toContainText("FPS");
   await expect(page.getByLabel("plotter workspace")).toContainText(/orion_motor0_angle_rad[\s\S]*rad/);
 });
