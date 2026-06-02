@@ -115,6 +115,8 @@ npm.cmd run tauri dev
 
 2026-06-02 時点で、Plotter の canvas / Live Plot / CSV Plot / current values / performance 表示は一旦削除している。直前までの軽量化検証では canvas 自前実装の複雑さと負荷が残ったため、次にプロットを戻す場合は uPlot などの専用ライブラリへ移行する。現状の Plotter 画面は layout JSON の読み込み、series 一覧、series 属性表示だけを残し、他 UI 整理の邪魔になる描画処理と timer / buffer state は持たない。
 
+2026-06-03 時点で、Plotter 左ペインは Foxglove の Plot Panel 設定を参考に、General / Legend / X Axis / Y Axis / Series の設定セクションへ整理している。CSV 出力パスは将来追加候補だが現時点では非表示。Series では表示対象の選択と色設定のみを扱い、色が未指定の series には GUI 側で既定パレットを自動割当する。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

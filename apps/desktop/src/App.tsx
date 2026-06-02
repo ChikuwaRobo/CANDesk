@@ -29,6 +29,7 @@ import { mapParseConfig, mapPlotLayout } from "./lib/parserMapping";
 import {
   resetSeenSampleKeys,
 } from "./lib/plotHistory";
+import { autoAssignPlotSeriesColors } from "./lib/plotColors";
 import { useDummyFrames } from "./hooks/useDummyFrames";
 import { useSnapshotPolling } from "./hooks/useSnapshotPolling";
 import "./styles.css";
@@ -63,7 +64,7 @@ export default function App() {
   const [plotLayoutName, setPlotLayoutName] = React.useState("example.canrush-layout.json");
   const [parserSignals, setParserSignals] = React.useState(sampleParserSignals);
   const [selectedSignalId, setSelectedSignalId] = React.useState(sampleParserSignals[0].id);
-  const [plotSeries, setPlotSeries] = React.useState(samplePlotSeries);
+  const [plotSeries, setPlotSeries] = React.useState(autoAssignPlotSeriesColors(samplePlotSeries));
   const [selectedSeriesId, setSelectedSeriesId] = React.useState(samplePlotSeries[0].id);
   const [visibleSeriesIds, setVisibleSeriesIds] = React.useState<string[]>([
     samplePlotSeries[0].id,
@@ -247,7 +248,7 @@ export default function App() {
   async function loadPlotLayout() {
     try {
       const layout = await client.loadPlotLayout(plotLayoutPath);
-      const nextSeries = mapPlotLayout(layout);
+      const nextSeries = autoAssignPlotSeriesColors(mapPlotLayout(layout));
       setPlotSeries(nextSeries);
       setSelectedSeriesId(nextSeries[0]?.id ?? "");
       setVisibleSeriesIds(nextSeries[0] ? [nextSeries[0].id] : []);
@@ -295,6 +296,12 @@ export default function App() {
       ? visibleSeriesIds.filter((id) => id !== seriesId)
       : [...visibleSeriesIds, seriesId];
     setVisibleSeriesIds(next);
+  }
+
+  function updatePlotSeriesColor(seriesId: string, color: string) {
+    setPlotSeries((current) =>
+      current.map((series) => (series.id === seriesId ? { ...series, color } : series)),
+    );
   }
 
   async function refreshCaptureFilePreview() {
@@ -414,7 +421,6 @@ export default function App() {
         <PlotterView
           plotLayoutName={plotLayoutName}
           plotLayoutPath={plotLayoutPath}
-          capturePreviewPath={capturePreviewPath}
           plotSeries={plotSeries}
           selectedSeries={selectedSeries}
           selectedSeriesId={selectedSeriesId}
@@ -422,10 +428,10 @@ export default function App() {
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
           onPlotLayoutPathChange={setPlotLayoutPath}
-          onCapturePreviewPathChange={setCapturePreviewPath}
           onLoadPlotLayout={loadPlotLayout}
           onSelectedSeriesChange={setSelectedSeriesId}
           onVisibleSeriesToggle={toggleVisibleSeries}
+          onSeriesColorChange={updatePlotSeriesColor}
         />
       ) : null}
 

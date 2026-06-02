@@ -49,8 +49,14 @@ test("plotter layout can be loaded and series can be selected headlessly", async
 
   await page.getByRole("button", { name: "Load" }).click();
   await expect(page.getByLabel("plotter workspace")).toContainText("4 series");
+  await expect(page.getByLabel("plotter workspace")).toContainText("X Axis");
+  await expect(page.getByLabel("plotter workspace")).toContainText("Legend");
+  await expect(page.getByLabel("plotter workspace")).not.toContainText("Capture CSV");
+  await expect(page.getByLabel("plotter workspace")).not.toContainText("Selected");
 
   await page.getByRole("checkbox").nth(1).check();
+  await page.getByLabel("Motor0 angle color").fill("#ff00aa");
   await page.getByRole("button", { name: /Motor0 angle/ }).click();
   await expect(page.getByLabel("plotter workspace")).toContainText("orion_motor0_angle_rad");
+  await expect.poll(async () => page.getByLabel("Motor0 angle color").inputValue()).toBe("#ff00aa");
 });

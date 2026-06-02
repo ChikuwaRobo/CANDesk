@@ -471,6 +471,10 @@ label {
   overflow: auto;
 }
 
+.plot-settings-panel {
+  padding-top: 12px;
+}
+
 .workspace-main-panel {
   min-width: 0;
   min-height: 0;
@@ -559,6 +563,10 @@ label {
   margin-top: 10px;
 }
 
+.single-action {
+  grid-template-columns: 1fr;
+}
+
 .wide-action {
   width: 100%;
   margin-top: 8px;
@@ -570,6 +578,35 @@ label {
   margin-top: 12px;
 }
 
+.plot-settings-section {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #d2dde0;
+}
+
+.plot-settings-section h3 {
+  margin: 0;
+  color: #28343b;
+  font-size: 13px;
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: 94px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: #516169;
+  font-size: 12px;
+}
+
+.setting-row input,
+.setting-row select {
+  width: 100%;
+  min-width: 0;
+}
+
 .series-list-row {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
@@ -577,6 +614,10 @@ label {
   border: 1px solid #d3dde1;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.plot-series-row {
+  grid-template-columns: 28px minmax(0, 1fr) 42px;
 }
 
 .series-list-row.selected {
@@ -606,6 +647,30 @@ label {
   border: 0;
   background: transparent;
   text-align: left;
+}
+
+.series-color-picker {
+  display: grid;
+  place-items: center;
+  min-height: 54px;
+  border-left: 1px solid #d9e1e3;
+  cursor: pointer;
+}
+
+.series-color-picker span {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #ffffff;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px #9ca9ae;
+}
+
+.series-color-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .signal-list span,
