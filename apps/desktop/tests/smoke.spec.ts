@@ -53,12 +53,17 @@ test("plotter layout can be loaded and series can be selected headlessly", async
   await expect(page.getByLabel("plotter workspace")).toContainText("Legend");
   await expect(page.getByLabel("plotter workspace")).not.toContainText("Capture CSV");
   await expect(page.getByLabel("plotter workspace")).not.toContainText("Selected");
+  await expect(page.getByLabel("plotter workspace")).not.toContainText("Color 1");
 
   await page.getByRole("checkbox").nth(2).check();
-  await page.getByLabel("Motor0 angle color").selectOption("#F5774D");
-  await page.getByRole("button", { name: /Motor0 angle/ }).click();
+  await page.getByLabel("Motor0 angle color").click();
+  await page.getByRole("button", { name: "Motor0 angle #F5774D" }).click();
+  await page.getByRole("button", { name: "Motor0 angle orion_motor0_angle_rad" }).click();
   await expect(page.getByLabel("plotter workspace")).toContainText("orion_motor0_angle_rad");
-  await expect.poll(async () => page.getByLabel("Motor0 angle color").inputValue()).toBe("#F5774D");
   await expect(page.getByLabel("plotter workspace")).toContainText("Current Values");
+  await page.getByRole("button", { name: "RUN" }).click();
+  await expect(page.getByRole("button", { name: "STOP" })).toBeVisible();
   await expect(page.getByLabel("plotter workspace")).toContainText(/orion_motor0_angle_rad[\s\S]*rad/);
+  await page.getByRole("button", { name: "STOP" }).click();
+  await expect(page.getByRole("button", { name: "RUN" })).toBeVisible();
 });

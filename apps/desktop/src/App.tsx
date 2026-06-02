@@ -74,6 +74,7 @@ export default function App() {
   ]);
   const [signalSamples, setSignalSamples] = React.useState<SignalSampleDto[]>([]);
   const [plotterCurrentSamples, setPlotterCurrentSamples] = React.useState<Record<string, SignalSampleDto>>({});
+  const [plotterValuesRunning, setPlotterValuesRunning] = React.useState(false);
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
@@ -116,7 +117,7 @@ export default function App() {
   }, [selectedFrameId, visibleFrames]);
 
   React.useEffect(() => {
-    if (workspaceView !== "plotter") {
+    if (workspaceView !== "plotter" || !plotterValuesRunning) {
       if (plotterLiveTimerRef.current !== null) {
         window.clearTimeout(plotterLiveTimerRef.current);
         plotterLiveTimerRef.current = null;
@@ -168,7 +169,7 @@ export default function App() {
       }
       plotterLiveInFlightRef.current = false;
     };
-  }, [client, parserSignals, plotSeries, visibleSeriesIds, workspaceView]);
+  }, [client, parserSignals, plotSeries, plotterValuesRunning, visibleSeriesIds, workspaceView]);
 
   async function refreshPorts() {
     try {
@@ -372,6 +373,21 @@ export default function App() {
     );
   }
 
+  async function togglePlotterValuesRunning() {
+    if (plotterValuesRunning) {
+      setPlotterValuesRunning(false);
+      setParsePreviewStatus("stopped");
+      return;
+    }
+    const loadedSignals = await loadParseConfig();
+    if (!loadedSignals) {
+      return;
+    }
+    plotterLiveCursorRef.current = null;
+    setParsePreviewStatus("starting");
+    setPlotterValuesRunning(true);
+  }
+
   async function refreshCaptureFilePreview() {
     try {
       const preview = await client.parsePlotCaptureFile({
@@ -493,6 +509,7 @@ export default function App() {
           selectedSeriesId={selectedSeriesId}
           visibleSeriesIds={visibleSeriesIds}
           currentValues={selectedPlotterValues}
+          valuesRunning={plotterValuesRunning}
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
           onPlotLayoutPathChange={setPlotLayoutPath}
@@ -500,6 +517,7 @@ export default function App() {
           onSelectedSeriesChange={setSelectedSeriesId}
           onVisibleSeriesToggle={toggleVisibleSeries}
           onSeriesColorChange={updatePlotSeriesColor}
+          onToggleValuesRunning={togglePlotterValuesRunning}
         />
       ) : null}
 

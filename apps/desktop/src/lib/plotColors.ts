@@ -14,6 +14,8 @@ export const plotColorPalette = [
 export function autoAssignPlotSeriesColors(seriesList: PlotSeries[]) {
   return seriesList.map((series, index) => ({
     ...series,
-    color: series.color || plotColorPalette[index % plotColorPalette.length],
+    color: plotColorPalette.includes(series.color)
+      ? series.color
+      : plotColorPalette[index % plotColorPalette.length],
   }));
 }

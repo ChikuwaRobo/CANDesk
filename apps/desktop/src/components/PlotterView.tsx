@@ -1,4 +1,4 @@
-import { FileJson, LineChart, Radio } from "lucide-react";
+import { Activity, Check, ChevronDown, CirclePause, FileJson, LineChart, Radio } from "lucide-react";
 import { plotColorPalette } from "../lib/plotColors";
 import type { PlotSeries, SignalSampleDto } from "../types";
 
@@ -14,6 +14,7 @@ type PlotterViewProps = {
   selectedSeriesId: string;
   visibleSeriesIds: string[];
   currentValues: CurrentValue[];
+  valuesRunning: boolean;
   signalSampleCount: number;
   parsePreviewStatus: string;
   onPlotLayoutPathChange: (value: string) => void;
@@ -21,6 +22,7 @@ type PlotterViewProps = {
   onSelectedSeriesChange: (id: string) => void;
   onVisibleSeriesToggle: (id: string) => void;
   onSeriesColorChange: (id: string, color: string) => void;
+  onToggleValuesRunning: () => void;
 };
 
 export function PlotterView({
@@ -30,6 +32,7 @@ export function PlotterView({
   selectedSeriesId,
   visibleSeriesIds,
   currentValues,
+  valuesRunning,
   signalSampleCount,
   parsePreviewStatus,
   onPlotLayoutPathChange,
@@ -37,6 +40,7 @@ export function PlotterView({
   onSelectedSeriesChange,
   onVisibleSeriesToggle,
   onSeriesColorChange,
+  onToggleValuesRunning,
 }: PlotterViewProps) {
   return (
     <section className="plotter-workspace" aria-label="plotter workspace">
@@ -70,6 +74,10 @@ export function PlotterView({
             <button type="button" title="Plot layout JSON を読み込み" onClick={onLoadPlotLayout}>
               <FileJson size={16} />
               Load
+            </button>
+            <button type="button" title="現在値の更新" onClick={onToggleValuesRunning}>
+              {valuesRunning ? <CirclePause size={16} /> : <Activity size={16} />}
+              {valuesRunning ? "STOP" : "RUN"}
             </button>
           </div>
         </section>
@@ -136,20 +144,25 @@ export function PlotterView({
                   <span>{series.label}</span>
                   <strong>{series.signalId}</strong>
                 </button>
-                <label className="series-color-select" title={`${series.label} color`}>
-                  <span style={{ background: series.color }} />
-                  <select
-                    aria-label={`${series.label} color`}
-                    value={series.color}
-                    onChange={(event) => onSeriesColorChange(series.id, event.target.value)}
-                  >
-                    {plotColorPalette.map((color, index) => (
-                      <option key={color} value={color}>
-                        Color {index + 1}
-                      </option>
+                <details className="series-color-menu">
+                  <summary aria-label={`${series.label} color`}>
+                    <span style={{ background: series.color }} />
+                    <ChevronDown size={14} />
+                  </summary>
+                  <div className="series-color-options">
+                    {plotColorPalette.map((color) => (
+                      <button
+                        aria-label={`${series.label} ${color}`}
+                        key={color}
+                        type="button"
+                        onClick={() => onSeriesColorChange(series.id, color)}
+                      >
+                        <span style={{ background: color }} />
+                        {series.color === color ? <Check size={14} /> : null}
+                      </button>
                     ))}
-                  </select>
-                </label>
+                  </div>
+                </details>
               </div>
             ))}
           </div>
