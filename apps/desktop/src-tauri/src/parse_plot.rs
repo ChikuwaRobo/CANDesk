@@ -358,6 +358,43 @@ mod tests {
     }
 
     #[test]
+    fn parse_plot_live_since_plots_all_non_mouse_orion_series_at_high_rate() {
+        let state = state_with_orion_high_rate_history(64);
+        load_orion_parse_and_layout(&state);
+
+        let preview = match parse_plot_live_since_for_state(
+            &state.inner,
+            ParsePlotLiveRequestDto {
+                since_sequence: None,
+                selected_series_ids: vec![
+                    "motor0_rps".to_string(),
+                    "motor0_angle_rad".to_string(),
+                    "battery_voltage".to_string(),
+                    "current0".to_string(),
+                ],
+            },
+        ) {
+            Ok(preview) => preview,
+            Err(error) => panic!("failed to build high-rate live plot history: {error}"),
+        };
+
+        let series_ids = preview
+            .points
+            .iter()
+            .map(|point| point.series_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(preview.metrics.frames, 64 * 3);
+        assert_eq!(preview.samples.len(), 64 * 4);
+        assert_eq!(preview.points.len(), 64 * 4);
+        assert!(series_ids.contains("motor0_rps"));
+        assert!(series_ids.contains("motor0_angle_rad"));
+        assert!(series_ids.contains("battery_voltage"));
+        assert!(series_ids.contains("current0"));
+        assert!(!series_ids.contains("mouse_raw_x"));
+        assert!(!series_ids.contains("mouse_raw_y"));
+    }
+
+    #[test]
     fn parse_plot_capture_file_uses_loaded_config_and_sample_capture() {
         let preview = match parse_plot_capture_file_from_paths(
             "examples/orion.canrush-parse.json",
@@ -404,5 +441,84 @@ mod tests {
             inner.plot_history.push(frame);
         }
         state
+    }
+
+    fn state_with_orion_high_rate_history(cycles: u32) -> ReceiverState {
+        let state = ReceiverState::default();
+        {
+            let mut inner = match state.inner.lock() {
+                Ok(inner) => inner,
+                Err(error) => panic!("failed to lock receiver state: {error}"),
+            };
+            for index in 0..cycles {
+                let motor = match CanFrame::new_rx(
+                    "CAN0",
+                    "test",
+                    0x200,
+                    IdFormat::Standard,
+                    FrameFormat::Classic,
+                    FrameType::Data,
+                    8,
+                    [
+                        (100.0 + index as f32).to_le_bytes(),
+                        (0.5 + index as f32).to_le_bytes(),
+                    ]
+                    .concat(),
+                ) {
+                    Ok(frame) => frame,
+                    Err(error) => panic!("failed to build motor frame: {error}"),
+                };
+                let power = match CanFrame::new_rx(
+                    "CAN0",
+                    "test",
+                    0x215,
+                    IdFormat::Standard,
+                    FrameFormat::Classic,
+                    FrameType::Data,
+                    8,
+                    [(24.0 + index as f32).to_le_bytes(), [0_u8; 4]].concat(),
+                ) {
+                    Ok(frame) => frame,
+                    Err(error) => panic!("failed to build power frame: {error}"),
+                };
+                let current = match CanFrame::new_rx(
+                    "CAN0",
+                    "test",
+                    0x230,
+                    IdFormat::Standard,
+                    FrameFormat::Classic,
+                    FrameType::Data,
+                    8,
+                    [(5.0 + index as f32).to_le_bytes(), [0_u8; 4]].concat(),
+                ) {
+                    Ok(frame) => frame,
+                    Err(error) => panic!("failed to build current frame: {error}"),
+                };
+                for frame in [motor, power, current] {
+                    inner.latest.ingest(frame.clone());
+                    inner.plot_history.push(frame);
+                }
+            }
+        }
+        state
+    }
+
+    fn load_orion_parse_and_layout(state: &ReceiverState) {
+        let mut inner = match state.inner.lock() {
+            Ok(inner) => inner,
+            Err(error) => panic!("failed to lock receiver state: {error}"),
+        };
+        inner.parse_config = Some(
+            match read_json_file::<ParseConfig>("examples/orion.canrush-parse.json") {
+                Ok(config) => config,
+                Err(error) => panic!("failed to load parse config: {error}"),
+            },
+        );
+        inner.plot_layout = Some(
+            match read_json_file::<PlotLayout>("examples/orion.canrush-layout.json") {
+                Ok(layout) => layout,
+                Err(error) => panic!("failed to load plot layout: {error}"),
+            },
+        );
     }
 }

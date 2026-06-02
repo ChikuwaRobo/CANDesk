@@ -482,6 +482,31 @@ label {
   overflow: auto;
 }
 
+.plot-display-panel {
+  display: grid;
+  grid-template-rows: auto minmax(300px, 1fr);
+  min-height: 420px;
+  margin-bottom: 14px;
+}
+
+.uplot-live-chart {
+  min-width: 0;
+  min-height: 360px;
+  height: min(58vh, 620px);
+  border: 1px solid #d9e1e3;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.uplot-live-chart .uplot {
+  font-family: inherit;
+}
+
+.current-values-heading {
+  margin-top: 8px;
+}
+
 .config-summary {
   display: grid;
   gap: 4px;

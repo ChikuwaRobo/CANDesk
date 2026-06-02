@@ -102,6 +102,21 @@ export type SnapshotDto = {
 export type SortMode = "id" | "bus" | "recent";
 export type WorkspaceView = "monitor" | "parser" | "plotter";
 
+export type PlotterPerfStats = {
+  pollIntervalMs: number;
+  apiMs: number;
+  rustTotalMs: number;
+  rustLockMs: number;
+  rustParseMs: number;
+  rustBuildPointsMs: number;
+  rustFrames: number;
+  commitMs: number;
+  samplesPerPoll: number;
+  droppedFrames: number;
+  renderFps: number;
+  plotFrameMs: number;
+};
+
 export type ParserSignal = {
   id: string;
   name: string;

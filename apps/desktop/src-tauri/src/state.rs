@@ -65,7 +65,11 @@ impl PlotFrameHistory {
         &self,
         since_sequence: Option<u64>,
     ) -> (Vec<PlotFrameHistoryEntry>, u64, u64) {
-        let oldest_sequence = self.entries.front().map(|entry| entry.sequence).unwrap_or(0);
+        let oldest_sequence = self
+            .entries
+            .front()
+            .map(|entry| entry.sequence)
+            .unwrap_or(0);
         let (entries, next_sequence) = self.since(since_sequence);
         (entries, next_sequence, oldest_sequence)
     }

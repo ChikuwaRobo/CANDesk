@@ -20,7 +20,7 @@ import type {
 } from "../types";
 
 const realtimePreviewIntervalMs = 100;
-const previewLiveBatchSize = 12;
+const previewLiveBatchSize = 64;
 
 function previewParseConfig(name: string): ParseConfigDto {
   return {
@@ -123,7 +123,7 @@ function makePreviewLiveSince(input: ParsePlotLiveInput): ParsePlotLiveDto {
   const points: PlotPointDto[] = [];
   for (let batchIndex = 1; batchIndex <= previewLiveBatchSize; batchIndex += 1) {
     const sequence = startSequence + batchIndex;
-    const timestamp = ((Date.now() - (previewLiveBatchSize - batchIndex) * 8) / 1000).toFixed(3);
+    const timestamp = ((Date.now() - (previewLiveBatchSize - batchIndex)) / 1000).toFixed(3);
     for (const series of selectedSeries) {
       const signal = input.parserSignals.find((candidate) => candidate.id === series.signalId);
       if (!signal) {

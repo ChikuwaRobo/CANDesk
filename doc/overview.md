@@ -127,6 +127,10 @@ Plotter には暫定のパフォーマンスメトリクスを表示する。Pol
 
 実機計測で Rust 時間の大半が Lock に出たため、`parse_plot_live_since` 内で dropped frame 判定用の oldest sequence を取得するために履歴全体を clone していた処理を削除した。`PlotFrameHistory::since_with_oldest` で oldest sequence を O(1) 取得し、clone 対象を cursor 以降の frame だけに限定する。
 
+Plotter の描画は uPlot で復活させた。React state に全 plot point を保持せず、App 側の ref に直近 10 秒分の `PlotPointDto` を保持し、更新時に `UPlotLiveChart` が uPlot の `setData` を呼ぶ。初期表示 series は CAN に流れない mouse 系を除外し、motor/power の 4 series を選択状態にする。preview 環境の 4 series ヘッドレス計測では uPlot 更新の `Plot` が約 5.5～15.3ms、FPS が 60 で、1 フレーム 33ms 未満の条件を満たした。
+
+後から有効化した series が描画されない問題への対策として、live parse API は表示選択とは独立して layout 上の全 series を取得し、uPlot 側で checkbox 選択された series だけを表示する。checkbox toggle 時に plot buffer と cursor は消さず、描画対象だけを切り替える。preview dummy は 1 poll あたり 64 frame、50ms poll 時に 1 series あたり 1kHz 超相当へ上げ、4 series で後から再有効化した場合も `data-point-count` が増えることを smoke / Playwright 計測で確認した。Rust 側にも 64 cycle の Orion high-rate history から motor/power の 4 series がすべて point 化され、mouse series は含まれないテストを追加した。実機ポート COM3 / COM85 は検出できたが、2026-06-03 の確認時点では 2秒 capture が両方 0 frame で、実 CAN 入力による GUI plot 確認は未成立。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

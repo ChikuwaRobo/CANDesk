@@ -1,7 +1,7 @@
 import { Check, ChevronDown, LineChart, Radio } from "lucide-react";
 import { plotColorPalette } from "../lib/plotColors";
-import type { PlotterPerfStats } from "../App";
-import type { PlotSeries, SignalSampleDto } from "../types";
+import type { PlotPointDto, PlotSeries, PlotterPerfStats, SignalSampleDto } from "../types";
+import { UPlotLiveChart } from "./UPlotLiveChart";
 
 type CurrentValue = {
   series: PlotSeries;
@@ -15,6 +15,8 @@ type PlotterViewProps = {
   selectedSeriesId: string;
   visibleSeriesIds: string[];
   currentValues: CurrentValue[];
+  plotPoints: PlotPointDto[];
+  plotDataVersion: number;
   valuesRunning: boolean;
   perfStats: PlotterPerfStats | null;
   signalSampleCount: number;
@@ -23,6 +25,7 @@ type PlotterViewProps = {
   onSelectedSeriesChange: (id: string) => void;
   onVisibleSeriesToggle: (id: string) => void;
   onSeriesColorChange: (id: string, color: string) => void;
+  onPlotFrameMeasured: (durationMs: number) => void;
 };
 
 export function PlotterView({
@@ -32,6 +35,8 @@ export function PlotterView({
   selectedSeriesId,
   visibleSeriesIds,
   currentValues,
+  plotPoints,
+  plotDataVersion,
   valuesRunning,
   perfStats,
   signalSampleCount,
@@ -40,6 +45,7 @@ export function PlotterView({
   onSelectedSeriesChange,
   onVisibleSeriesToggle,
   onSeriesColorChange,
+  onPlotFrameMeasured,
 }: PlotterViewProps) {
   return (
     <section className="plotter-workspace" aria-label="plotter workspace">
@@ -103,6 +109,10 @@ export function PlotterView({
             <div>
               <span>FPS</span>
               <strong>{perfStats.renderFps.toFixed(1)}</strong>
+            </div>
+            <div>
+              <span>Plot</span>
+              <strong>{perfStats.plotFrameMs.toFixed(1)} ms</strong>
             </div>
             <div>
               <span>Dropped</span>
@@ -207,7 +217,21 @@ export function PlotterView({
       </aside>
 
       <section className="workspace-main-panel">
-        <div className="panel-heading">
+        <section className="plot-display-panel">
+          <div className="panel-heading">
+            <LineChart size={18} />
+            <h2>Live Plot</h2>
+          </div>
+          <UPlotLiveChart
+            plotSeries={plotSeries}
+            visibleSeriesIds={visibleSeriesIds}
+            points={plotPoints}
+            dataVersion={plotDataVersion}
+            showLegend
+            onFrameMeasured={onPlotFrameMeasured}
+          />
+        </section>
+        <div className="panel-heading current-values-heading">
           <Radio size={18} />
           <h2>Current Values</h2>
         </div>

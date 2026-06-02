@@ -2,6 +2,8 @@ import React from "react";
 import type {
   BusConfig,
   PlotSeries,
+  PlotPointDto,
+  PlotterPerfStats,
   SerialPortInfo,
   SignalSampleDto,
   SortMode,
@@ -27,6 +29,7 @@ import {
 } from "./lib/frames";
 import { mapParseConfig, mapPlotLayout } from "./lib/parserMapping";
 import {
+  filterRecentPlotPoints,
   resetSeenSampleKeys,
 } from "./lib/plotHistory";
 import { autoAssignPlotSeriesColors } from "./lib/plotColors";
@@ -34,19 +37,11 @@ import { useDummyFrames } from "./hooks/useDummyFrames";
 import { useSnapshotPolling } from "./hooks/useSnapshotPolling";
 import "./styles.css";
 
-export type PlotterPerfStats = {
-  pollIntervalMs: number;
-  apiMs: number;
-  rustTotalMs: number;
-  rustLockMs: number;
-  rustParseMs: number;
-  rustBuildPointsMs: number;
-  rustFrames: number;
-  commitMs: number;
-  samplesPerPoll: number;
-  droppedFrames: number;
-  renderFps: number;
-};
+function defaultVisiblePlotSeriesIds(seriesList: PlotSeries[]) {
+  const nonMouseSeries = seriesList.filter((series) => !series.id.includes("mouse"));
+  const defaultSeries = nonMouseSeries.length > 0 ? nonMouseSeries : seriesList;
+  return defaultSeries.map((series) => series.id);
+}
 
 export default function App() {
   const client = React.useMemo(() => getCanRushClient(), []);
@@ -55,6 +50,8 @@ export default function App() {
   const plotterLiveInFlightRef = React.useRef(false);
   const plotterLiveCursorRef = React.useRef<number | null>(null);
   const plotterAutoStartRef = React.useRef(false);
+  const plotterPointsRef = React.useRef<PlotPointDto[]>([]);
+  const plotterPlotFrameMsRef = React.useRef(0);
   const plotterPerfRef = React.useRef({
     lastPollStartedAt: 0,
     lastReportAt: 0,
@@ -110,6 +107,7 @@ export default function App() {
   const [plotterCurrentSamples, setPlotterCurrentSamples] = React.useState<Record<string, SignalSampleDto>>({});
   const [plotterValuesRunning, setPlotterValuesRunning] = React.useState(false);
   const [plotterPerfStats, setPlotterPerfStats] = React.useState<PlotterPerfStats | null>(null);
+  const [plotterDataVersion, setPlotterDataVersion] = React.useState(0);
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
@@ -141,6 +139,9 @@ export default function App() {
       series,
       sample: plotterCurrentSamples[series.signalId],
     }));
+  const handlePlotFrameMeasured = React.useCallback((durationMs: number) => {
+    plotterPlotFrameMsRef.current = durationMs;
+  }, []);
 
   React.useEffect(() => {
     if (visibleFrames.length === 0) {
@@ -180,7 +181,7 @@ export default function App() {
           parserSignals,
           plotSeries,
           sinceSequence: plotterLiveCursorRef.current,
-          selectedSeriesIds: visibleSeriesIds,
+          selectedSeriesIds: plotSeries.map((series) => series.id),
         });
         perf.apiMsTotal += performance.now() - apiStartedAt;
         perf.rustTotalMsTotal += preview.metrics.total_ms;
@@ -191,6 +192,13 @@ export default function App() {
         perf.samplesTotal += preview.samples.length;
         perf.droppedFramesTotal += preview.dropped_frames;
         plotterLiveCursorRef.current = preview.next_sequence;
+        if (preview.points.length > 0) {
+          plotterPointsRef.current = filterRecentPlotPoints(
+            [...plotterPointsRef.current, ...preview.points],
+            10,
+          );
+          setPlotterDataVersion((version) => version + 1);
+        }
         if (preview.samples.length > 0) {
           const updateStartedAt = performance.now();
           setPlotterCurrentSamples((current) => {
@@ -226,6 +234,7 @@ export default function App() {
             samplesPerPoll: perf.samplesTotal / perf.pollCount,
             droppedFrames: perf.droppedFramesTotal,
             renderFps: perf.renderFps,
+            plotFrameMs: plotterPlotFrameMsRef.current,
           });
           perf.lastReportAt = now;
           perf.pollCount = 0;
@@ -254,7 +263,7 @@ export default function App() {
       }
       plotterLiveInFlightRef.current = false;
     };
-  }, [client, parserSignals, plotSeries, plotterValuesRunning, visibleSeriesIds, workspaceView]);
+  }, [client, parserSignals, plotSeries, plotterValuesRunning, workspaceView]);
 
   React.useEffect(() => {
     if (workspaceView !== "plotter") {
@@ -431,8 +440,10 @@ export default function App() {
       const nextSeries = autoAssignPlotSeriesColors(mapPlotLayout(layout));
       setPlotSeries(nextSeries);
       setSelectedSeriesId(nextSeries[0]?.id ?? "");
-      setVisibleSeriesIds(nextSeries[0] ? [nextSeries[0].id] : []);
+      setVisibleSeriesIds(defaultVisiblePlotSeriesIds(nextSeries));
       setPlotterCurrentSamples({});
+      plotterPointsRef.current = [];
+      setPlotterDataVersion((version) => version + 1);
       plotterLiveCursorRef.current = null;
       setPlotLayoutName(layout.name || plotLayoutPath);
       setParsePreviewStatus("layout loaded");
@@ -478,7 +489,7 @@ export default function App() {
       ? visibleSeriesIds.filter((id) => id !== seriesId)
       : [...visibleSeriesIds, seriesId];
     setVisibleSeriesIds(next);
-    plotterLiveCursorRef.current = null;
+    setPlotterDataVersion((version) => version + 1);
   }
 
   function updatePlotSeriesColor(seriesId: string, color: string) {
@@ -630,8 +641,11 @@ export default function App() {
           selectedSeriesId={selectedSeriesId}
           visibleSeriesIds={visibleSeriesIds}
           currentValues={selectedPlotterValues}
+          plotPoints={plotterPointsRef.current}
+          plotDataVersion={plotterDataVersion}
           valuesRunning={plotterValuesRunning}
           perfStats={plotterPerfStats}
+          onPlotFrameMeasured={handlePlotFrameMeasured}
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
           onPlotLayoutPathChange={setPlotLayoutPath}
