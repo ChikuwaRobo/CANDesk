@@ -9,6 +9,14 @@ export const plotColorPalette = [
   "#E2558B",
   "#58A55C",
   "#C47A2C",
+  "#2F80ED",
+  "#EB5757",
+  "#F2994A",
+  "#27AE60",
+  "#56CCF2",
+  "#BB6BD9",
+  "#828282",
+  "#111827",
 ];
 
 export function autoAssignPlotSeriesColors(seriesList: PlotSeries[]) {

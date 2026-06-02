@@ -119,7 +119,7 @@ npm.cmd run tauri dev
 
 同日、Series の色設定は自由な color picker ではなく既定パレットのプルダウン選択に変更した。右ペインは Plotter の詳細設定ではなく、左ペインで選択した series に対応するパース済み最新値をリアルタイム表示する確認ビューとして使う。これにより uPlot 実装前に「どのデータをプロット対象にするか」と「選択対象だけが値表示に流れるか」を GUI で確認できる。
 
-Plotter の現在値更新は RUN / STOP ボタンで明示的に開始・停止する。RUN 開始時に parse config を読み込み、RUN 中のみ選択 series を対象に live parse API をポーリングし、STOP 中はタイマーを止めて最後の値を保持する。Series 色は固定パレットのスウォッチ付きドロップダウンから選ぶ。
+Plotter は画面表示時に parse config と plot layout を自動で読み込み、選択 series を対象に live parse API のポーリングを自動開始する。現在値確認 UI の更新周期は 50ms、理論上の上限は約 20Hz とする。API 呼び出しが処理中の場合は多重呼び出しせず次回周期へ送る。Series 色は 4x4 の固定パレットからスウォッチ付きドロップダウンで選ぶ。
 
 ## 現在の優先順位
 

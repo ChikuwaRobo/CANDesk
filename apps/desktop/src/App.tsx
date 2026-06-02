@@ -40,6 +40,7 @@ export default function App() {
   const plotterLiveTimerRef = React.useRef<number | null>(null);
   const plotterLiveInFlightRef = React.useRef(false);
   const plotterLiveCursorRef = React.useRef<number | null>(null);
+  const plotterAutoStartRef = React.useRef(false);
   const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
@@ -128,7 +129,7 @@ export default function App() {
 
     const refresh = async () => {
       if (plotterLiveInFlightRef.current) {
-        plotterLiveTimerRef.current = window.setTimeout(refresh, 250);
+        plotterLiveTimerRef.current = window.setTimeout(refresh, 50);
         return;
       }
       plotterLiveInFlightRef.current = true;
@@ -157,7 +158,7 @@ export default function App() {
         setEventLog(`plotter value refresh failed: ${String(error)}`);
       } finally {
         plotterLiveInFlightRef.current = false;
-        plotterLiveTimerRef.current = window.setTimeout(refresh, 250);
+        plotterLiveTimerRef.current = window.setTimeout(refresh, 50);
       }
     };
 
@@ -373,20 +374,27 @@ export default function App() {
     );
   }
 
-  async function togglePlotterValuesRunning() {
-    if (plotterValuesRunning) {
-      setPlotterValuesRunning(false);
-      setParsePreviewStatus("stopped");
+  React.useEffect(() => {
+    if (workspaceView !== "plotter" || plotterAutoStartRef.current) {
       return;
     }
-    const loadedSignals = await loadParseConfig();
-    if (!loadedSignals) {
-      return;
-    }
-    plotterLiveCursorRef.current = null;
-    setParsePreviewStatus("starting");
-    setPlotterValuesRunning(true);
-  }
+    plotterAutoStartRef.current = true;
+    const startPlotter = async () => {
+      setParsePreviewStatus("starting");
+      const [loadedSignals, loadedSeries] = await Promise.all([
+        loadParseConfig(),
+        loadPlotLayout(),
+      ]);
+      if (!loadedSignals || !loadedSeries) {
+        setPlotterValuesRunning(false);
+        return;
+      }
+      plotterLiveCursorRef.current = null;
+      setPlotterValuesRunning(true);
+      setParsePreviewStatus("running");
+    };
+    void startPlotter();
+  }, [workspaceView]);
 
   async function refreshCaptureFilePreview() {
     try {
@@ -513,11 +521,9 @@ export default function App() {
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
           onPlotLayoutPathChange={setPlotLayoutPath}
-          onLoadPlotLayout={loadPlotLayout}
           onSelectedSeriesChange={setSelectedSeriesId}
           onVisibleSeriesToggle={toggleVisibleSeries}
           onSeriesColorChange={updatePlotSeriesColor}
-          onToggleValuesRunning={togglePlotterValuesRunning}
         />
       ) : null}
 

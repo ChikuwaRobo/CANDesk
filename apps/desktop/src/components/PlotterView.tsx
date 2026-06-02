@@ -1,4 +1,4 @@
-import { Activity, Check, ChevronDown, CirclePause, FileJson, LineChart, Radio } from "lucide-react";
+import { Check, ChevronDown, LineChart, Radio } from "lucide-react";
 import { plotColorPalette } from "../lib/plotColors";
 import type { PlotSeries, SignalSampleDto } from "../types";
 
@@ -18,11 +18,9 @@ type PlotterViewProps = {
   signalSampleCount: number;
   parsePreviewStatus: string;
   onPlotLayoutPathChange: (value: string) => void;
-  onLoadPlotLayout: () => void;
   onSelectedSeriesChange: (id: string) => void;
   onVisibleSeriesToggle: (id: string) => void;
   onSeriesColorChange: (id: string, color: string) => void;
-  onToggleValuesRunning: () => void;
 };
 
 export function PlotterView({
@@ -36,11 +34,9 @@ export function PlotterView({
   signalSampleCount,
   parsePreviewStatus,
   onPlotLayoutPathChange,
-  onLoadPlotLayout,
   onSelectedSeriesChange,
   onVisibleSeriesToggle,
   onSeriesColorChange,
-  onToggleValuesRunning,
 }: PlotterViewProps) {
   return (
     <section className="plotter-workspace" aria-label="plotter workspace">
@@ -60,7 +56,7 @@ export function PlotterView({
           </div>
           <div>
             <span>Status</span>
-            <strong>{parsePreviewStatus}</strong>
+            <strong>{valuesRunning ? parsePreviewStatus : "starting"}</strong>
           </div>
         </div>
 
@@ -70,16 +66,6 @@ export function PlotterView({
             Layout path
             <input value={plotLayoutPath} onChange={(event) => onPlotLayoutPathChange(event.target.value)} />
           </label>
-          <div className="stacked-actions single-action">
-            <button type="button" title="Plot layout JSON を読み込み" onClick={onLoadPlotLayout}>
-              <FileJson size={16} />
-              Load
-            </button>
-            <button type="button" title="現在値の更新" onClick={onToggleValuesRunning}>
-              {valuesRunning ? <CirclePause size={16} /> : <Activity size={16} />}
-              {valuesRunning ? "STOP" : "RUN"}
-            </button>
-          </div>
         </section>
 
         <section className="plot-settings-section">
@@ -187,9 +173,7 @@ export function PlotterView({
               <time>{sample?.timestamp_host ?? "-"}</time>
             </div>
           ))}
-          {currentValues.length === 0 ? (
-            <p className="empty-detail">No selected data</p>
-          ) : null}
+          {currentValues.length === 0 ? <p className="empty-detail">No selected data</p> : null}
         </div>
       </section>
     </section>
