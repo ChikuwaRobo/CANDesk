@@ -37,6 +37,9 @@ import "./styles.css";
 export default function App() {
   const client = React.useMemo(() => getCanRushClient(), []);
   const signalSampleKeysRef = React.useRef(new Set<string>());
+  const plotterLiveTimerRef = React.useRef<number | null>(null);
+  const plotterLiveInFlightRef = React.useRef(false);
+  const plotterLiveCursorRef = React.useRef<number | null>(null);
   const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
@@ -70,6 +73,7 @@ export default function App() {
     samplePlotSeries[0].id,
   ]);
   const [signalSamples, setSignalSamples] = React.useState<SignalSampleDto[]>([]);
+  const [plotterCurrentSamples, setPlotterCurrentSamples] = React.useState<Record<string, SignalSampleDto>>({});
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
@@ -95,6 +99,12 @@ export default function App() {
   const selectedSignalSamples = signalSamples.filter(
     (sample) => sample.signal_id === selectedSignal.id,
   );
+  const selectedPlotterValues = plotSeries
+    .filter((series) => visibleSeriesIds.includes(series.id))
+    .map((series) => ({
+      series,
+      sample: plotterCurrentSamples[series.signalId],
+    }));
 
   React.useEffect(() => {
     if (visibleFrames.length === 0) {
@@ -104,6 +114,61 @@ export default function App() {
       setSelectedFrameId(visibleFrames[0].rowKey);
     }
   }, [selectedFrameId, visibleFrames]);
+
+  React.useEffect(() => {
+    if (workspaceView !== "plotter") {
+      if (plotterLiveTimerRef.current !== null) {
+        window.clearTimeout(plotterLiveTimerRef.current);
+        plotterLiveTimerRef.current = null;
+      }
+      plotterLiveInFlightRef.current = false;
+      return undefined;
+    }
+
+    const refresh = async () => {
+      if (plotterLiveInFlightRef.current) {
+        plotterLiveTimerRef.current = window.setTimeout(refresh, 250);
+        return;
+      }
+      plotterLiveInFlightRef.current = true;
+      try {
+        const preview = await client.parsePlotLiveSince({
+          parserSignals,
+          plotSeries,
+          sinceSequence: plotterLiveCursorRef.current,
+          selectedSeriesIds: visibleSeriesIds,
+        });
+        plotterLiveCursorRef.current = preview.next_sequence;
+        if (preview.samples.length > 0) {
+          setPlotterCurrentSamples((current) => {
+            const next = { ...current };
+            for (const sample of preview.samples) {
+              next[sample.signal_id] = sample;
+            }
+            return next;
+          });
+          setSignalSamples(preview.samples);
+        }
+        setParsePreviewStatus(
+          `${preview.samples.length} sample(s), ${preview.points.length} point(s) live`,
+        );
+      } catch (error) {
+        setEventLog(`plotter value refresh failed: ${String(error)}`);
+      } finally {
+        plotterLiveInFlightRef.current = false;
+        plotterLiveTimerRef.current = window.setTimeout(refresh, 250);
+      }
+    };
+
+    plotterLiveTimerRef.current = window.setTimeout(refresh, 0);
+    return () => {
+      if (plotterLiveTimerRef.current !== null) {
+        window.clearTimeout(plotterLiveTimerRef.current);
+        plotterLiveTimerRef.current = null;
+      }
+      plotterLiveInFlightRef.current = false;
+    };
+  }, [client, parserSignals, plotSeries, visibleSeriesIds, workspaceView]);
 
   async function refreshPorts() {
     try {
@@ -252,6 +317,8 @@ export default function App() {
       setPlotSeries(nextSeries);
       setSelectedSeriesId(nextSeries[0]?.id ?? "");
       setVisibleSeriesIds(nextSeries[0] ? [nextSeries[0].id] : []);
+      setPlotterCurrentSamples({});
+      plotterLiveCursorRef.current = null;
       setPlotLayoutName(layout.name || plotLayoutPath);
       setParsePreviewStatus("layout loaded");
       setEventLog(
@@ -296,6 +363,7 @@ export default function App() {
       ? visibleSeriesIds.filter((id) => id !== seriesId)
       : [...visibleSeriesIds, seriesId];
     setVisibleSeriesIds(next);
+    plotterLiveCursorRef.current = null;
   }
 
   function updatePlotSeriesColor(seriesId: string, color: string) {
@@ -422,9 +490,9 @@ export default function App() {
           plotLayoutName={plotLayoutName}
           plotLayoutPath={plotLayoutPath}
           plotSeries={plotSeries}
-          selectedSeries={selectedSeries}
           selectedSeriesId={selectedSeriesId}
           visibleSeriesIds={visibleSeriesIds}
+          currentValues={selectedPlotterValues}
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
           onPlotLayoutPathChange={setPlotLayoutPath}

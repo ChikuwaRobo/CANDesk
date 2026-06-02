@@ -1,13 +1,19 @@
-import { FileJson, LineChart, SlidersHorizontal } from "lucide-react";
-import type { PlotSeries } from "../types";
+import { FileJson, LineChart, Radio } from "lucide-react";
+import { plotColorPalette } from "../lib/plotColors";
+import type { PlotSeries, SignalSampleDto } from "../types";
+
+type CurrentValue = {
+  series: PlotSeries;
+  sample?: SignalSampleDto;
+};
 
 type PlotterViewProps = {
   plotLayoutName: string;
   plotLayoutPath: string;
   plotSeries: PlotSeries[];
-  selectedSeries: PlotSeries;
   selectedSeriesId: string;
   visibleSeriesIds: string[];
+  currentValues: CurrentValue[];
   signalSampleCount: number;
   parsePreviewStatus: string;
   onPlotLayoutPathChange: (value: string) => void;
@@ -21,9 +27,9 @@ export function PlotterView({
   plotLayoutName,
   plotLayoutPath,
   plotSeries,
-  selectedSeries,
   selectedSeriesId,
   visibleSeriesIds,
+  currentValues,
   signalSampleCount,
   parsePreviewStatus,
   onPlotLayoutPathChange,
@@ -44,10 +50,6 @@ export function PlotterView({
           <strong>{plotSeries.length} series</strong>
         </div>
         <div className="config-metrics">
-          <div>
-            <span>Series</span>
-            <strong>{plotSeries.length}</strong>
-          </div>
           <div>
             <span>Samples</span>
             <strong>{signalSampleCount}</strong>
@@ -74,7 +76,7 @@ export function PlotterView({
 
         <section className="plot-settings-section">
           <h3>Legend</h3>
-          <label className="setting-row">
+          <label className="setting-row compact-check-row">
             Show legend
             <input type="checkbox" checked readOnly />
           </label>
@@ -132,18 +134,21 @@ export function PlotterView({
                 </label>
                 <button type="button" onClick={() => onSelectedSeriesChange(series.id)}>
                   <span>{series.label}</span>
-                  <strong>
-                    {series.panelId} / {series.signalId}
-                  </strong>
+                  <strong>{series.signalId}</strong>
                 </button>
-                <label className="series-color-picker" title={`${series.label} color`}>
+                <label className="series-color-select" title={`${series.label} color`}>
                   <span style={{ background: series.color }} />
-                  <input
+                  <select
                     aria-label={`${series.label} color`}
-                    type="color"
                     value={series.color}
                     onChange={(event) => onSeriesColorChange(series.id, event.target.value)}
-                  />
+                  >
+                    {plotColorPalette.map((color, index) => (
+                      <option key={color} value={color}>
+                        Color {index + 1}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
             ))}
@@ -153,63 +158,25 @@ export function PlotterView({
 
       <section className="workspace-main-panel">
         <div className="panel-heading">
-          <SlidersHorizontal size={18} />
-          <h2>Series Editor</h2>
+          <Radio size={18} />
+          <h2>Current Values</h2>
         </div>
-        <div className="workspace-summary">
-          <div>
-            <span>Series</span>
-            <strong>{selectedSeries.label}</strong>
-          </div>
-          <div>
-            <span>Panel</span>
-            <strong>{selectedSeries.panelTitle}</strong>
-          </div>
-          <div>
-            <span>Signal</span>
-            <strong>{selectedSeries.signalId}</strong>
-          </div>
-        </div>
-        <div className="editor-grid plot-editor-grid">
-          <label>
-            Series ID
-            <input value={selectedSeries.id} readOnly />
-          </label>
-          <label>
-            Panel
-            <input value={selectedSeries.panelTitle} readOnly />
-          </label>
-          <label>
-            Source signal
-            <input value={selectedSeries.signalId} readOnly />
-          </label>
-          <label>
-            Label
-            <input value={selectedSeries.label} readOnly />
-          </label>
-          <label>
-            Axis
-            <select value={selectedSeries.axis} disabled>
-              <option value="left">left</option>
-              <option value="right">right</option>
-            </select>
-          </label>
-          <label>
-            Scale
-            <input value={selectedSeries.scale} readOnly />
-          </label>
-          <label>
-            Offset
-            <input value={selectedSeries.offset} readOnly />
-          </label>
-          <label>
-            Unit override
-            <input value={selectedSeries.unit} readOnly />
-          </label>
-          <label>
-            Color
-            <input value={selectedSeries.color} readOnly />
-          </label>
+        <div className="current-value-list">
+          {currentValues.map(({ series, sample }) => (
+            <div className="current-value-row" key={series.id}>
+              <span className="series-color-chip" style={{ background: series.color }} />
+              <div>
+                <strong>{series.label}</strong>
+                <small>{series.signalId}</small>
+              </div>
+              <output>{sample ? sample.value.toFixed(3) : "-"}</output>
+              <span>{sample?.unit || series.unit || "-"}</span>
+              <time>{sample?.timestamp_host ?? "-"}</time>
+            </div>
+          ))}
+          {currentValues.length === 0 ? (
+            <p className="empty-detail">No selected data</p>
+          ) : null}
         </div>
       </section>
     </section>

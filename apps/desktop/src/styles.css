@@ -607,6 +607,13 @@ label {
   min-width: 0;
 }
 
+.compact-check-row input[type="checkbox"] {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .series-list-row {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
@@ -617,7 +624,7 @@ label {
 }
 
 .plot-series-row {
-  grid-template-columns: 28px minmax(0, 1fr) 42px;
+  grid-template-columns: 28px minmax(0, 1fr) 88px;
 }
 
 .series-list-row.selected {
@@ -649,15 +656,17 @@ label {
   text-align: left;
 }
 
-.series-color-picker {
+.series-color-select {
   display: grid;
-  place-items: center;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
   min-height: 54px;
+  padding: 0 8px;
   border-left: 1px solid #d9e1e3;
-  cursor: pointer;
 }
 
-.series-color-picker span {
+.series-color-select span {
   width: 18px;
   height: 18px;
   border: 1px solid #ffffff;
@@ -665,12 +674,10 @@ label {
   box-shadow: 0 0 0 1px #9ca9ae;
 }
 
-.series-color-picker input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
+.series-color-select select {
+  min-width: 0;
+  width: 100%;
+  padding: 0 4px;
 }
 
 .signal-list span,
@@ -703,6 +710,55 @@ label {
 
 .plot-editor-grid {
   grid-template-columns: repeat(4, minmax(140px, 1fr));
+}
+
+.current-value-list {
+  display: grid;
+  gap: 8px;
+}
+
+.current-value-row {
+  display: grid;
+  grid-template-columns: 16px minmax(160px, 1fr) minmax(90px, max-content) 70px 120px;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px 12px;
+  border: 1px solid #d9e1e3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.series-color-chip {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.current-value-row div {
+  min-width: 0;
+}
+
+.current-value-row strong,
+.current-value-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.current-value-row small,
+.current-value-row span,
+.current-value-row time {
+  color: #66747a;
+  font-size: 12px;
+}
+
+.current-value-row output {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: right;
 }
 
 .editor-checkbox {

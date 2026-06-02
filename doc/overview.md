@@ -117,6 +117,8 @@ npm.cmd run tauri dev
 
 2026-06-03 時点で、Plotter 左ペインは Foxglove の Plot Panel 設定を参考に、General / Legend / X Axis / Y Axis / Series の設定セクションへ整理している。CSV 出力パスは将来追加候補だが現時点では非表示。Series では表示対象の選択と色設定のみを扱い、色が未指定の series には GUI 側で既定パレットを自動割当する。
 
+同日、Series の色設定は自由な color picker ではなく既定パレットのプルダウン選択に変更した。右ペインは Plotter の詳細設定ではなく、左ペインで選択した series に対応するパース済み最新値をリアルタイム表示する確認ビューとして使う。これにより uPlot 実装前に「どのデータをプロット対象にするか」と「選択対象だけが値表示に流れるか」を GUI で確認できる。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。
