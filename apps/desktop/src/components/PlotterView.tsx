@@ -1,21 +1,5 @@
-import { Activity, CirclePause, FileJson, LineChart, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
-import type { RefObject } from "react";
-import type { BufferedPlotPoint } from "../lib/plotSeriesBuffer";
+import { FileJson, LineChart, SlidersHorizontal } from "lucide-react";
 import type { PlotSeries } from "../types";
-
-type CurrentPlotValue = {
-  series: PlotSeries;
-  latestPoint?: BufferedPlotPoint;
-};
-
-type PlotPerformance = {
-  liveRequestMs: number;
-  livePoints: number;
-  canvasDrawMs: number;
-  canvasPoints: number;
-  canvasRawPoints: number;
-  decimationMs: number;
-};
 
 type PlotterViewProps = {
   plotLayoutName: string;
@@ -25,24 +9,11 @@ type PlotterViewProps = {
   selectedSeries: PlotSeries;
   selectedSeriesId: string;
   visibleSeriesIds: string[];
-  selectedSeriesPointCount: number;
-  selectedPanelTitle: string;
-  visiblePlotPointCount: number;
-  currentPlotValues: CurrentPlotValue[];
-  hasPlotPoints: boolean;
-  plotPerformance: PlotPerformance;
   signalSampleCount: number;
   parsePreviewStatus: string;
-  realtimePlot: boolean;
-  plotVisibleWindowSeconds: number;
-  plotCanvasRef: RefObject<HTMLCanvasElement>;
   onPlotLayoutPathChange: (value: string) => void;
   onCapturePreviewPathChange: (value: string) => void;
   onLoadPlotLayout: () => void;
-  onRefreshParsePlotPreview: () => void;
-  onRefreshCaptureFilePreview: () => void;
-  onToggleRealtimePlot: () => void;
-  onClearPlot: () => void;
   onSelectedSeriesChange: (id: string) => void;
   onVisibleSeriesToggle: (id: string) => void;
 };
@@ -55,24 +26,11 @@ export function PlotterView({
   selectedSeries,
   selectedSeriesId,
   visibleSeriesIds,
-  selectedSeriesPointCount,
-  selectedPanelTitle,
-  visiblePlotPointCount,
-  currentPlotValues,
-  hasPlotPoints,
-  plotPerformance,
   signalSampleCount,
   parsePreviewStatus,
-  realtimePlot,
-  plotVisibleWindowSeconds,
-  plotCanvasRef,
   onPlotLayoutPathChange,
   onCapturePreviewPathChange,
   onLoadPlotLayout,
-  onRefreshParsePlotPreview,
-  onRefreshCaptureFilePreview,
-  onToggleRealtimePlot,
-  onClearPlot,
   onSelectedSeriesChange,
   onVisibleSeriesToggle,
 }: PlotterViewProps) {
@@ -89,8 +47,8 @@ export function PlotterView({
         </div>
         <div className="config-metrics">
           <div>
-            <span>Points</span>
-            <strong>{visiblePlotPointCount}</strong>
+            <span>Series</span>
+            <strong>{plotSeries.length}</strong>
           </div>
           <div>
             <span>Samples</span>
@@ -101,8 +59,8 @@ export function PlotterView({
             <strong>{parsePreviewStatus}</strong>
           </div>
           <div>
-            <span>Live</span>
-            <strong>{realtimePlot ? "running" : "stopped"}</strong>
+            <span>Selected</span>
+            <strong>{selectedSeries.label}</strong>
           </div>
         </div>
         <label className="path-input">
@@ -117,27 +75,11 @@ export function PlotterView({
           />
         </label>
         <div className="stacked-actions">
-          <button type="button" title="プロットレイアウトJSONを読み込み" onClick={onLoadPlotLayout}>
+          <button type="button" title="Plot layout JSON を読み込み" onClick={onLoadPlotLayout}>
             <FileJson size={16} />
             Load
           </button>
-          <button type="button" title="現在の受信データからプロットを生成" onClick={onRefreshParsePlotPreview}>
-            <RefreshCw size={16} />
-            Plot
-          </button>
-          <button type="button" title="Capture CSVをパースしてプロット" onClick={onRefreshCaptureFilePreview}>
-            <LineChart size={16} />
-            CSV Plot
-          </button>
-          <button type="button" title="リアルタイムプロット更新" onClick={onToggleRealtimePlot}>
-            {realtimePlot ? <CirclePause size={16} /> : <Activity size={16} />}
-            {realtimePlot ? "Stop" : "Live"}
-          </button>
         </div>
-        <button type="button" className="wide-action" title="プロット履歴をクリア" onClick={onClearPlot}>
-          <Square size={16} />
-          Clear Plot
-        </button>
         <div className="signal-list">
           {plotSeries.map((series) => (
             <div
@@ -170,8 +112,8 @@ export function PlotterView({
         </div>
         <div className="workspace-summary">
           <div>
-            <span>Selected points</span>
-            <strong>{selectedSeriesPointCount}</strong>
+            <span>Series</span>
+            <strong>{selectedSeries.label}</strong>
           </div>
           <div>
             <span>Panel</span>
@@ -222,55 +164,6 @@ export function PlotterView({
             Color
             <input value={selectedSeries.color} readOnly />
           </label>
-        </div>
-
-        <div className="plot-preview">
-          <div className="plot-preview-header">
-            <strong>{selectedPanelTitle}</strong>
-            <span>
-              last {plotVisibleWindowSeconds}s / {visiblePlotPointCount} point(s)
-            </span>
-          </div>
-          <canvas ref={plotCanvasRef} role="img" aria-label="plot preview" />
-          <div className="plot-legend">
-            {plotSeries.map((series) => (
-              <button
-                type="button"
-                key={series.id}
-                className={selectedSeriesId === series.id ? "selected" : ""}
-                onClick={() => onSelectedSeriesChange(series.id)}
-              >
-                <span style={{ background: series.color }} />
-                {series.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="current-values-panel">
-          <div className="panel-heading compact-heading">
-            <Activity size={16} />
-            <h3>Current Values</h3>
-          </div>
-          <div className="current-values-grid">
-            {currentPlotValues.map(({ series, latestPoint }) => (
-              <div className="current-value-card" key={series.id}>
-                <span style={{ borderColor: series.color }}>{series.label}</span>
-                <strong>{latestPoint ? latestPoint.value.toFixed(3) : "-"}</strong>
-                <small>
-                  {latestPoint?.unit || series.unit || "-"} / {latestPoint?.timestamp_host ?? "-"}
-                </small>
-              </div>
-            ))}
-          </div>
-          {!hasPlotPoints ? <p className="empty-table">No plot points</p> : null}
-        </div>
-        <div className="plot-performance-panel">
-          <span>Live request {plotPerformance.liveRequestMs.toFixed(1)}ms</span>
-          <span>Live points {plotPerformance.livePoints}</span>
-          <span>Raw points {plotPerformance.canvasRawPoints}</span>
-          <span>Drawable {plotPerformance.canvasPoints}</span>
-          <span>Decimate {plotPerformance.decimationMs.toFixed(1)}ms</span>
-          <span>Canvas draw {plotPerformance.canvasDrawMs.toFixed(1)}ms</span>
         </div>
       </section>
     </section>

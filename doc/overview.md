@@ -90,11 +90,11 @@ npm.cmd run test:smoke
 
 `test:smoke` は実ウィンドウを開かず、headless Chromium で browser preview を操作する。人間の PC 操作を妨げない基本動作確認として、Monitor / Parser / Plotter の最小操作をここで検出する。
 
-GUI の pure function は `apps/desktop/src/lib/` に切り出し、Vitest の `test:unit` で固定する。現時点では frame 表示、Parser / Plotter mapping、plot 履歴 dedup / windowing、Canvas 座標計算、Orion dummy frame 生成を unit test 対象にしている。
+GUI の pure function は `apps/desktop/src/lib/` に切り出し、Vitest の `test:unit` で固定する。現時点では frame 表示、Parser / Plotter mapping、plot 履歴 dedup / windowing、Orion dummy frame 生成を unit test 対象にしている。Plotter の canvas 描画実装は uPlot 移行前提で一旦削除済み。
 
 GUI から Tauri command を呼ぶ処理は `apps/desktop/src/api/` に閉じ込める。`desktopClient` は `invoke()` を担当し、`previewClient` は headless browser smoke test 用の同等データを返す。React component では `getCanRushClient()` 経由で client を使い、実ウィンドウ有無の分岐を直接持たない。
 
-GUI の realtime lifecycle は `apps/desktop/src/hooks/` に分ける。snapshot polling、dummy frame timer、Live Plot timer、Canvas animation loop は hook 側で管理し、画面 component は状態合成と表示に寄せる。
+GUI の realtime lifecycle は `apps/desktop/src/hooks/` に分ける。snapshot polling と dummy frame timer は hook 側で管理し、画面 component は状態合成と表示に寄せる。Live Plot timer と Canvas animation loop は現時点では削除済み。
 
 GUI entry point の `apps/desktop/src/main.tsx` は React root 作成だけにする。画面の状態合成は `App.tsx`、再利用する表示部品は `apps/desktop/src/components/` に置く。header / status / Monitor / Parser / Plotter の主要 component は分離済み。
 
@@ -113,21 +113,7 @@ npm.cmd run tauri dev
 
 2026-05-28 の実機切り分けでは、GUI が起動した `canrush-server-gui` に対して CLI から `stats` / `capture` / `parse` を実行し、`COM3` / `COM85` の両バスで数千 fps 規模の受信と `examples/orion.canrush-parse.json` による信号抽出を確認している。CAN 受信、server stream、parse config 適用は成立しているため、GUI の Live Plot 不具合は Tauri 側の latest frame 共有、live preview command、plot layout mapping、canvas 表示のどこで止まるかを分けて確認する。Plotter 画面には `Samples` と `Status` を表示し、Live 押下後に「sample は増えるが point が 0」「point は増えるが canvas が空」などを実ウィンドウ上で判定できるようにしている。
 
-Live Plot の描画では、1 系列 1 点だけの初期状態でも見えるように canvas 上で線に加えて点マーカーを描く。Live は server の latest snapshot を周期的に読むため、GUI 表示用の plot point はポーリング時刻で刻んで履歴に追加する。これにより latest snapshot が同じ CAN ID 群だけを返す状態でも、時間軸上に値が積まれ、実ウィンドウで `Points` が増え続けることを確認できる。
-
-次の Plotter Live 改修では、上記の latest snapshot 方式を暫定実装として扱い、実受信 timestamp を持つ時系列 ring buffer 方式へ変更する。CAN 受信データ自体は間引かず、描画更新だけを最大 60fps に制限する。軽量化のため、Live Plot の parse / plot 対象は GUI で選択された series のみに限定する。詳細な作業順は `doc/refactoring-plan.md` の Phase 11 に残す。
-
-2026-05-29 時点で、Tauri backend には Plotter 用 ring buffer と cursor 付き Live Plot API を追加済み。GUI Live は選択 series のみを API に渡し、browser preview のダミーデータでは 1 series / 2 series の切り替えに応じて描画点数が増えることを確認済み。実機確認は未実施。
-
-Plotter では大量の plot point をテキスト表として表示しない。履歴点は canvas 描画用に保持し、画面上のテキスト表示は選択 series の現在値だけにする。負荷確認用に Plotter 画面へ Live request 時間、Live points、Canvas draw 時間、Canvas points を表示する。2026-05-29 の browser preview ダミーデータ確認では、2 series 表示時に約 576 points の保持で Live request 0.0ms、Canvas draw 0.7ms 程度だった。
-
-Plotter canvas は高密度時に raw point を直接すべて描かず、描画時だけ pixel bucket の min/max envelope に変換する。元データは捨てず、canvas へ渡す点数だけを series あたり最大 400 点に抑える。2026-05-29 の browser benchmark では、10 series × 10,000 点、合計 100,000 点の合成データで、最適化前の目安が平均 3.5ms / p95 7.0ms、初期 min/max 実装が平均 23.2ms / p95 29.4ms、最終実装が平均 8.4ms / p95 10.3ms だった。通常の preview Live 4 series 条件では raw 3,600 点に対して drawable 1,252 点、Canvas draw 約 1.0ms を確認している。
-
-追加の軽量化比較では、同じ 100,000 点条件で、現行 object 配列 + min/max envelope が平均 8.1ms / p95 9.2ms、TypedArray 系列バッファ + min/max line prototype が平均 0.8ms / p95 0.6ms、TypedArray + vertical min/max bars prototype が平均 0.6ms / p95 0.5ms だった。uPlot は既存ライブラリ参考として試したが、同一データ redraw が no-op に近い測定になり、直接比較には使いにくい。次の本実装候補は、Plotter の描画用データ構造を series 単位の typed arrays / ring buffer に移すこと。
-
-2026-05-29 に上記 4 の方針として、GUI Plotter の描画用データを `PlotPointDto[]` の React state から series 単位の `Float64Array` / `Float32Array` ring buffer に移した。Live Plot の canvas は `apps/desktop/src/lib/plotSeriesBuffer.ts` のバッファを直接読み、描画時に pixel bucket の min/max line へ変換する。これにより、点履歴の追記で巨大な object 配列を再生成せず、React state は表示用の件数と現在値の更新に限定する。実装後の確認では `npm.cmd run build`、`npm.cmd run test:unit`、`npm.cmd run test:smoke` が成功し、browser preview の Plotter Live で console error なし、Raw points 840 / Drawable 293 / Decimate 0.1ms / Canvas draw 1.8ms 程度を確認した。
-
-同日、描画形状の乱れを避けるため、Plotter の保持方式を raw point ring buffer から 60Hz 固定時間 bucket 集約へ変更した。各 series は受信 timestamp から `floor(timestamp * 60)` で bucket を決め、bucket ごとに min / max / avg / count だけを保持する。canvas は min/max を薄い縦線、avg を主線として描画するため、同じデータであれば GUI の再描画タイミングや Live API の返却chunkが変わっても同じ bucket 列になる。Vitest には「同じ入力を一括投入しても分割投入しても bucket が一致する」テストを追加した。browser preview の Plotter Live では console error なし、Raw points 444-744、Drawable 675-1131、Decimate 0.0ms、Canvas draw 0.1-1.9ms 程度を確認した。
+2026-06-02 時点で、Plotter の canvas / Live Plot / CSV Plot / current values / performance 表示は一旦削除している。直前までの軽量化検証では canvas 自前実装の複雑さと負荷が残ったため、次にプロットを戻す場合は uPlot などの専用ライブラリへ移行する。現状の Plotter 画面は layout JSON の読み込み、series 一覧、series 属性表示だけを残し、他 UI 整理の邪魔になる描画処理と timer / buffer state は持たない。
 
 ## 現在の優先順位
 

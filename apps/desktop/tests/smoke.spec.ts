@@ -41,57 +41,16 @@ test("parser preview can load and parse sample signals headlessly", async ({ pag
   await expect(page.getByLabel("parser workspace")).toContainText("motor0_rps");
 });
 
-test("plotter live preview draws points in headless browser mode", async ({ page }) => {
+test("plotter layout can be loaded and series can be selected headlessly", async ({ page }) => {
   await page.goto("/");
 
   await page.getByRole("button", { name: "Plotter" }).click();
   await expect(page.getByLabel("plotter workspace")).toBeVisible();
-  await expect(page.getByRole("img", { name: "plot preview" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Live" }).click();
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
-  await expect(page.getByLabel("plotter workspace")).toContainText("running");
-  await expect(page.getByLabel("plotter workspace")).toContainText(/12 sample\(s\), 12 point\(s\) live/);
-  await expect(page.getByText(/last 10s \/ [1-9]\d* point\(s\)/)).toBeVisible();
-  await expect(page.getByText(/last 10s \/ ([5-9]|\d{2,}) point\(s\)/)).toBeVisible();
-  await expect
-    .poll(async () =>
-      page.getByRole("img", { name: "plot preview" }).evaluate((canvas) => {
-        const context = (canvas as HTMLCanvasElement).getContext("2d");
-        if (!context) {
-          return 0;
-        }
-        const { width, height } = canvas as HTMLCanvasElement;
-        const pixels = context.getImageData(0, 0, width, height).data;
-        let coloredPixels = 0;
-        for (let index = 0; index < pixels.length; index += 4) {
-          const red = pixels[index];
-          const green = pixels[index + 1];
-          const blue = pixels[index + 2];
-          if (Math.max(red, green, blue) - Math.min(red, green, blue) > 30) {
-            coloredPixels += 1;
-          }
-        }
-        return coloredPixels;
-      }),
-    )
-    .toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Load" }).click();
+  await expect(page.getByLabel("plotter workspace")).toContainText("4 series");
 
   await page.getByRole("checkbox").nth(1).check();
-  await expect(page.getByLabel("plotter workspace")).toContainText("Selected points");
-  await expect(page.getByText(/last 10s \/ ([1-9]\d{2,}|\d{4,}) point\(s\)/)).toBeVisible();
-});
-
-test("plotter csv preview can be cleared headlessly", async ({ page }) => {
-  await page.goto("/");
-
-  await page.getByRole("button", { name: "Plotter" }).click();
-  await expect(page.getByLabel("plotter workspace")).toBeVisible();
-
-  await page.getByRole("button", { name: "CSV Plot" }).click();
-  await expect(page.getByText(/last 10s \/ [1-9]\d* point\(s\)/)).toBeVisible();
-
-  await page.getByRole("button", { name: "Clear Plot" }).click();
-  await expect(page.getByText("last 10s / 0 point(s)")).toBeVisible();
-  await expect(page.getByText("No plot points")).toBeVisible();
+  await page.getByRole("button", { name: /Motor0 angle/ }).click();
+  await expect(page.getByLabel("plotter workspace")).toContainText("orion_motor0_angle_rad");
 });

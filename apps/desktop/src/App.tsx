@@ -1,7 +1,6 @@
 import React from "react";
 import type {
   BusConfig,
-  ParsePlotPreviewDto,
   PlotSeries,
   SerialPortInfo,
   SignalSampleDto,
@@ -28,49 +27,15 @@ import {
 } from "./lib/frames";
 import { mapParseConfig, mapPlotLayout } from "./lib/parserMapping";
 import {
-  appendUniqueSamples,
-  maxRealtimeSamples,
-  plotVisibleWindowSeconds,
   resetSeenSampleKeys,
 } from "./lib/plotHistory";
-import {
-  appendPlotPointsToBuffers,
-  clearPlotSeriesBuffers,
-  countBufferedPointsInWindow,
-  createPlotSeriesBuffers,
-  ensurePlotSeriesBuffers,
-  getCurrentPlotValuesFromBuffers,
-  resetPlotSeriesBuffers,
-} from "./lib/plotSeriesBuffer";
 import { useDummyFrames } from "./hooks/useDummyFrames";
-import { usePlotCanvas } from "./hooks/usePlotCanvas";
 import { useSnapshotPolling } from "./hooks/useSnapshotPolling";
 import "./styles.css";
 
-const realtimePreviewIntervalMs = 100;
-const plotRenderFrameMs = 1000 / 60;
-
-type PlotPerformance = {
-  liveRequestMs: number;
-  livePoints: number;
-  canvasDrawMs: number;
-  canvasPoints: number;
-  canvasRawPoints: number;
-  decimationMs: number;
-};
-
 export default function App() {
   const client = React.useMemo(() => getCanRushClient(), []);
-  const plotCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const signalSampleKeysRef = React.useRef(new Set<string>());
-  const plotBuffersRef = React.useRef(createPlotSeriesBuffers(samplePlotSeries));
-  const plotSeriesRef = React.useRef<PlotSeries[]>(samplePlotSeries);
-  const visibleSeriesIdsRef = React.useRef<string[]>([samplePlotSeries[0].id]);
-  const livePreviewSequenceRef = React.useRef(0);
-  const realtimePlotTimerRef = React.useRef<number | null>(null);
-  const realtimePlotInFlightRef = React.useRef(false);
-  const livePlotCursorRef = React.useRef<number | null>(null);
-  const lastPlotPerformanceUpdateRef = React.useRef(0);
   const [workspaceView, setWorkspaceView] = React.useState<WorkspaceView>("monitor");
   const [ports, setPorts] = React.useState<SerialPortInfo[]>([]);
   const [buses, setBuses] = React.useState(initialBuses);
@@ -104,18 +69,7 @@ export default function App() {
     samplePlotSeries[0].id,
   ]);
   const [signalSamples, setSignalSamples] = React.useState<SignalSampleDto[]>([]);
-  const [visiblePlotPointCount, setVisiblePlotPointCount] = React.useState(0);
-  const [plotValueVersion, setPlotValueVersion] = React.useState(0);
   const [parsePreviewStatus, setParsePreviewStatus] = React.useState("not run");
-  const [realtimePlot, setRealtimePlot] = React.useState(false);
-  const [plotPerformance, setPlotPerformance] = React.useState<PlotPerformance>({
-    liveRequestMs: 0,
-    livePoints: 0,
-    canvasDrawMs: 0,
-    canvasPoints: 0,
-    canvasRawPoints: 0,
-    decimationMs: 0,
-  });
 
   const displayFrames = mergeBuses ? mergeFramesById(frames) : frames;
 
@@ -137,31 +91,9 @@ export default function App() {
     parserSignals.find((signal) => signal.id === selectedSignalId) ?? sampleParserSignals[0]!;
   const selectedSeries =
     plotSeries.find((series) => series.id === selectedSeriesId) ?? samplePlotSeries[0]!;
-  const selectedPanelTitle = selectedSeries.panelTitle;
   const selectedSignalSamples = signalSamples.filter(
     (sample) => sample.signal_id === selectedSignal.id,
   );
-  const selectedSeriesPointCount = countBufferedPointsInWindow(
-    plotBuffersRef.current,
-    [selectedSeries.id],
-    plotVisibleWindowSeconds,
-  );
-  const currentPlotValues = React.useMemo(
-    () => getCurrentPlotValuesFromBuffers(plotBuffersRef.current, plotSeries, visibleSeriesIds),
-    [plotSeries, plotValueVersion, visibleSeriesIds],
-  );
-
-  React.useEffect(() => {
-    plotSeriesRef.current = plotSeries;
-    ensurePlotSeriesBuffers(plotBuffersRef.current, plotSeries);
-  }, [plotSeries]);
-
-  React.useEffect(() => {
-    visibleSeriesIdsRef.current = visibleSeriesIds;
-    setVisiblePlotPointCount(
-      countBufferedPointsInWindow(plotBuffersRef.current, visibleSeriesIds, plotVisibleWindowSeconds),
-    );
-  }, [visibleSeriesIds, plotValueVersion]);
 
   React.useEffect(() => {
     if (visibleFrames.length === 0) {
@@ -171,24 +103,6 @@ export default function App() {
       setSelectedFrameId(visibleFrames[0].rowKey);
     }
   }, [selectedFrameId, visibleFrames]);
-
-  function refreshPlotBufferMetrics(seriesIds = visibleSeriesIds) {
-    setVisiblePlotPointCount(
-      countBufferedPointsInWindow(plotBuffersRef.current, seriesIds, plotVisibleWindowSeconds),
-    );
-    setPlotValueVersion((version) => version + 1);
-  }
-
-  function replacePlotBufferPoints(seriesList: PlotSeries[], preview: ParsePlotPreviewDto, seriesIds = visibleSeriesIds) {
-    resetPlotSeriesBuffers(plotBuffersRef.current, seriesList);
-    appendPlotPointsToBuffers(plotBuffersRef.current, preview.points);
-    refreshPlotBufferMetrics(seriesIds);
-  }
-
-  function appendPlotBufferPoints(preview: ParsePlotPreviewDto, seriesIds = visibleSeriesIds) {
-    appendPlotPointsToBuffers(plotBuffersRef.current, preview.points);
-    refreshPlotBufferMetrics(seriesIds);
-  }
 
   async function refreshPorts() {
     try {
@@ -317,8 +231,6 @@ export default function App() {
       setSelectedSignalId(nextSignals[0]?.id ?? "");
       setParseConfigName(config.name || parseConfigPath);
       setSignalSamples([]);
-      clearPlotSeriesBuffers(plotBuffersRef.current);
-      refreshPlotBufferMetrics();
       setParsePreviewStatus("config loaded");
       setEventLog(
         client.isPreview
@@ -340,8 +252,6 @@ export default function App() {
       setSelectedSeriesId(nextSeries[0]?.id ?? "");
       setVisibleSeriesIds(nextSeries[0] ? [nextSeries[0].id] : []);
       setPlotLayoutName(layout.name || plotLayoutPath);
-      resetPlotSeriesBuffers(plotBuffersRef.current, nextSeries);
-      refreshPlotBufferMetrics(nextSeries[0] ? [nextSeries[0].id] : []);
       setParsePreviewStatus("layout loaded");
       setEventLog(
         client.isPreview
@@ -355,141 +265,6 @@ export default function App() {
     }
   }
 
-  async function toggleRealtimePlot() {
-    if (realtimePlot) {
-      stopRealtimePlotLoop();
-      setRealtimePlot(false);
-      setParsePreviewStatus("live stopped");
-      return;
-    }
-
-    const loadedSignals = await loadParseConfig();
-    const loadedSeries = await loadPlotLayout();
-    if (!loadedSignals || !loadedSeries) {
-      return;
-    }
-    const liveSeriesIds = visibleSeriesIds.filter((id) =>
-      loadedSeries.some((series) => series.id === id),
-    );
-    const selectedLiveSeriesIds = liveSeriesIds.length > 0 ? liveSeriesIds : loadedSeries[0] ? [loadedSeries[0].id] : [];
-    setVisibleSeriesIds(selectedLiveSeriesIds);
-    setParsePreviewStatus("live starting");
-    setSignalSamples([]);
-    resetPlotSeriesBuffers(plotBuffersRef.current, loadedSeries);
-    refreshPlotBufferMetrics(selectedLiveSeriesIds);
-    livePreviewSequenceRef.current = 0;
-    livePlotCursorRef.current = null;
-    signalSampleKeysRef.current.clear();
-    try {
-      const preview = await client.parsePlotLiveSince({
-        parserSignals: loadedSignals,
-        plotSeries: loadedSeries,
-        sinceSequence: livePlotCursorRef.current,
-        selectedSeriesIds: selectedLiveSeriesIds,
-      });
-      livePlotCursorRef.current = preview.next_sequence;
-      applyParsePlotPreview(preview, "live", false, loadedSeries, selectedLiveSeriesIds);
-    } catch (error) {
-      setEventLog(`parse/plot preview failed: ${String(error)}`);
-      return;
-    }
-    setRealtimePlot(true);
-    scheduleRealtimePlotRefresh(loadedSignals, loadedSeries, selectedLiveSeriesIds);
-  }
-
-  function applyParsePlotPreview(
-    preview: ParsePlotPreviewDto,
-    sourceLabel: string,
-    append: boolean,
-    seriesList = plotSeries,
-    seriesIds = visibleSeriesIds,
-  ) {
-    if (append) {
-      setSignalSamples((current) =>
-        appendUniqueSamples(current, preview.samples, signalSampleKeysRef.current),
-      );
-      appendPlotBufferPoints(preview, seriesIds);
-    } else {
-      setSignalSamples(preview.samples);
-      replacePlotBufferPoints(seriesList, preview, seriesIds);
-      resetSeenSampleKeys(preview.samples, signalSampleKeysRef.current);
-    }
-    setParsePreviewStatus(
-      `${preview.samples.length} sample(s), ${preview.points.length} point(s) ${sourceLabel}`,
-    );
-  }
-
-  function stampLivePreview(preview: ParsePlotPreviewDto) {
-    livePreviewSequenceRef.current += 1;
-    const timestamp = (Date.now() / 1000).toFixed(3);
-    const sequenceBase = livePreviewSequenceRef.current * 10000;
-    return {
-      samples: preview.samples.map((sample, index) => ({
-        ...sample,
-        timestamp_host: timestamp,
-        source_sequence: sequenceBase + index,
-      })),
-      points: preview.points.map((point, index) => ({
-        ...point,
-        timestamp_host: timestamp,
-        source_sequence: sequenceBase + index,
-      })),
-    };
-  }
-
-  function stopRealtimePlotLoop() {
-    if (realtimePlotTimerRef.current !== null) {
-      window.clearTimeout(realtimePlotTimerRef.current);
-      realtimePlotTimerRef.current = null;
-    }
-    realtimePlotInFlightRef.current = false;
-  }
-
-  function scheduleRealtimePlotRefresh(
-    loadedSignals: typeof parserSignals,
-    loadedSeries: typeof plotSeries,
-    selectedSeriesIds: string[],
-  ) {
-    if (realtimePlotTimerRef.current !== null) {
-      window.clearTimeout(realtimePlotTimerRef.current);
-    }
-    const refresh = async () => {
-      if (realtimePlotInFlightRef.current) {
-        realtimePlotTimerRef.current = window.setTimeout(refresh, realtimePreviewIntervalMs);
-        return;
-      }
-      realtimePlotInFlightRef.current = true;
-      try {
-        const requestStartedAt = performance.now();
-        const preview = await client.parsePlotLiveSince({
-          parserSignals: loadedSignals,
-          plotSeries: loadedSeries,
-          sinceSequence: livePlotCursorRef.current,
-          selectedSeriesIds,
-        });
-        const liveRequestMs = performance.now() - requestStartedAt;
-        livePlotCursorRef.current = preview.next_sequence;
-        appendLiveParsePlotPreview(preview);
-        setPlotPerformance((current) => ({
-          ...current,
-          liveRequestMs,
-          livePoints: preview.points.length,
-        }));
-        setEventLog(
-          client.isPreview
-            ? "browser preview mode; live plot preview is simulated"
-            : `live parsed ${preview.samples.length} sample(s), built ${preview.points.length} plot point(s), dropped ${preview.dropped_frames} frame(s)`,
-        );
-      } catch (error) {
-        setEventLog(`live parse/plot preview failed: ${String(error)}`);
-      } finally {
-        realtimePlotInFlightRef.current = false;
-        realtimePlotTimerRef.current = window.setTimeout(refresh, realtimePreviewIntervalMs);
-      }
-    };
-    realtimePlotTimerRef.current = window.setTimeout(refresh, realtimePreviewIntervalMs);
-  }
-
   async function refreshParsePlotPreview(append = false) {
     try {
       const preview = append
@@ -500,41 +275,19 @@ export default function App() {
             parserSignals,
             plotSeries,
           });
-      const displayPreview = append ? stampLivePreview(preview) : preview;
-      applyParsePlotPreview(
-        displayPreview,
-        append ? "live" : client.isPreview ? "preview" : "",
-        append,
+      setSignalSamples(preview.samples);
+      resetSeenSampleKeys(preview.samples, signalSampleKeysRef.current);
+      setParsePreviewStatus(
+        `${preview.samples.length} sample(s), ${preview.points.length} point(s) ${append ? "live" : client.isPreview ? "preview" : ""}`,
       );
       setEventLog(
         client.isPreview
-          ? "browser preview mode; parse and plot preview is simulated"
+          ? "browser preview mode; parse preview is simulated"
           : `parsed ${preview.samples.length} sample(s), built ${preview.points.length} plot point(s)`,
       );
     } catch (error) {
-      setEventLog(`parse/plot preview failed: ${String(error)}`);
+      setEventLog(`parse preview failed: ${String(error)}`);
     }
-  }
-
-  function appendLiveParsePlotPreview(preview: ParsePlotPreviewDto) {
-    setSignalSamples((current) => {
-      const next = [...current, ...preview.samples].slice(-maxRealtimeSamples);
-      resetSeenSampleKeys(next, signalSampleKeysRef.current);
-      return next;
-    });
-    appendPlotBufferPoints(preview);
-    setParsePreviewStatus(
-      `${preview.samples.length} sample(s), ${preview.points.length} point(s) live`,
-    );
-  }
-
-  function resetPlotHistory() {
-    setSignalSamples([]);
-    clearPlotSeriesBuffers(plotBuffersRef.current);
-    refreshPlotBufferMetrics();
-    livePreviewSequenceRef.current = 0;
-    livePlotCursorRef.current = null;
-    signalSampleKeysRef.current.clear();
   }
 
   function toggleVisibleSeries(seriesId: string) {
@@ -542,15 +295,6 @@ export default function App() {
       ? visibleSeriesIds.filter((id) => id !== seriesId)
       : [...visibleSeriesIds, seriesId];
     setVisibleSeriesIds(next);
-    setSignalSamples([]);
-    clearPlotSeriesBuffers(plotBuffersRef.current);
-    refreshPlotBufferMetrics(next);
-    livePreviewSequenceRef.current = 0;
-    livePlotCursorRef.current = null;
-    signalSampleKeysRef.current.clear();
-    if (realtimePlot) {
-      scheduleRealtimePlotRefresh(parserSignals, plotSeries, next);
-    }
   }
 
   async function refreshCaptureFilePreview() {
@@ -563,7 +307,6 @@ export default function App() {
         plotSeries,
       });
       setSignalSamples(preview.samples);
-      replacePlotBufferPoints(plotSeries, preview);
       resetSeenSampleKeys(preview.samples, signalSampleKeysRef.current);
       setParsePreviewStatus(
         `${preview.samples.length} sample(s), ${preview.points.length} point(s) from CSV`,
@@ -589,8 +332,6 @@ export default function App() {
     void startServer();
   }, []);
 
-  React.useEffect(() => stopRealtimePlotLoop, []);
-
   useSnapshotPolling({
     client,
     enabled: !client.isPreview && !debugDummy,
@@ -610,29 +351,6 @@ export default function App() {
     setBuses,
     setFrames,
     setEventLog,
-  });
-
-  usePlotCanvas({
-    enabled: workspaceView === "plotter",
-    canvasRef: plotCanvasRef,
-    seriesRef: plotSeriesRef,
-    buffersRef: plotBuffersRef,
-    visibleSeriesIdsRef,
-    frameMs: plotRenderFrameMs,
-    onDraw: (canvasDrawMs, canvasRawPoints, canvasPoints, decimationMs) => {
-      const now = performance.now();
-      if (now - lastPlotPerformanceUpdateRef.current < 500) {
-        return;
-      }
-      lastPlotPerformanceUpdateRef.current = now;
-      setPlotPerformance((current) => ({
-        ...current,
-        canvasDrawMs,
-        canvasRawPoints,
-        canvasPoints,
-        decimationMs,
-      }));
-    },
   });
 
   return (
@@ -701,31 +419,11 @@ export default function App() {
           selectedSeries={selectedSeries}
           selectedSeriesId={selectedSeriesId}
           visibleSeriesIds={visibleSeriesIds}
-          selectedSeriesPointCount={selectedSeriesPointCount}
-          selectedPanelTitle={selectedPanelTitle}
-          visiblePlotPointCount={visiblePlotPointCount}
-          currentPlotValues={currentPlotValues}
-          hasPlotPoints={visiblePlotPointCount > 0}
-          plotPerformance={plotPerformance}
           signalSampleCount={signalSamples.length}
           parsePreviewStatus={parsePreviewStatus}
-          realtimePlot={realtimePlot}
-          plotVisibleWindowSeconds={plotVisibleWindowSeconds}
-          plotCanvasRef={plotCanvasRef}
           onPlotLayoutPathChange={setPlotLayoutPath}
           onCapturePreviewPathChange={setCapturePreviewPath}
           onLoadPlotLayout={loadPlotLayout}
-          onRefreshParsePlotPreview={() => refreshParsePlotPreview()}
-          onRefreshCaptureFilePreview={refreshCaptureFilePreview}
-          onToggleRealtimePlot={toggleRealtimePlot}
-          onClearPlot={() => {
-            setSignalSamples([]);
-            clearPlotSeriesBuffers(plotBuffersRef.current);
-            refreshPlotBufferMetrics();
-            livePlotCursorRef.current = null;
-            signalSampleKeysRef.current.clear();
-            setParsePreviewStatus("cleared");
-          }}
           onSelectedSeriesChange={setSelectedSeriesId}
           onVisibleSeriesToggle={toggleVisibleSeries}
         />
