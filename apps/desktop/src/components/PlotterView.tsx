@@ -73,6 +73,26 @@ export function PlotterView({
               <strong>{perfStats.apiMs.toFixed(1)} ms</strong>
             </div>
             <div>
+              <span>Rust</span>
+              <strong>{perfStats.rustTotalMs.toFixed(1)} ms</strong>
+            </div>
+            <div>
+              <span>Lock</span>
+              <strong>{perfStats.rustLockMs.toFixed(1)} ms</strong>
+            </div>
+            <div>
+              <span>Parse</span>
+              <strong>{perfStats.rustParseMs.toFixed(1)} ms</strong>
+            </div>
+            <div>
+              <span>Points</span>
+              <strong>{perfStats.rustBuildPointsMs.toFixed(1)} ms</strong>
+            </div>
+            <div>
+              <span>Frames</span>
+              <strong>{perfStats.rustFrames.toFixed(1)}</strong>
+            </div>
+            <div>
               <span>Commit</span>
               <strong>{perfStats.commitMs.toFixed(1)} ms</strong>
             </div>

@@ -37,6 +37,11 @@ import "./styles.css";
 export type PlotterPerfStats = {
   pollIntervalMs: number;
   apiMs: number;
+  rustTotalMs: number;
+  rustLockMs: number;
+  rustParseMs: number;
+  rustBuildPointsMs: number;
+  rustFrames: number;
   commitMs: number;
   samplesPerPoll: number;
   droppedFrames: number;
@@ -56,6 +61,11 @@ export default function App() {
     pollCount: 0,
     intervalMsTotal: 0,
     apiMsTotal: 0,
+    rustTotalMsTotal: 0,
+    rustLockMsTotal: 0,
+    rustParseMsTotal: 0,
+    rustBuildPointsMsTotal: 0,
+    rustFramesTotal: 0,
     commitMsTotal: 0,
     commitCount: 0,
     samplesTotal: 0,
@@ -173,6 +183,11 @@ export default function App() {
           selectedSeriesIds: visibleSeriesIds,
         });
         perf.apiMsTotal += performance.now() - apiStartedAt;
+        perf.rustTotalMsTotal += preview.metrics.total_ms;
+        perf.rustLockMsTotal += preview.metrics.lock_ms;
+        perf.rustParseMsTotal += preview.metrics.parse_ms;
+        perf.rustBuildPointsMsTotal += preview.metrics.build_points_ms;
+        perf.rustFramesTotal += preview.metrics.frames;
         perf.samplesTotal += preview.samples.length;
         perf.droppedFramesTotal += preview.dropped_frames;
         plotterLiveCursorRef.current = preview.next_sequence;
@@ -202,6 +217,11 @@ export default function App() {
           setPlotterPerfStats({
             pollIntervalMs: perf.intervalMsTotal / Math.max(1, perf.pollCount - 1),
             apiMs: perf.apiMsTotal / perf.pollCount,
+            rustTotalMs: perf.rustTotalMsTotal / perf.pollCount,
+            rustLockMs: perf.rustLockMsTotal / perf.pollCount,
+            rustParseMs: perf.rustParseMsTotal / perf.pollCount,
+            rustBuildPointsMs: perf.rustBuildPointsMsTotal / perf.pollCount,
+            rustFrames: perf.rustFramesTotal / perf.pollCount,
             commitMs: perf.commitCount > 0 ? perf.commitMsTotal / perf.commitCount : 0,
             samplesPerPoll: perf.samplesTotal / perf.pollCount,
             droppedFrames: perf.droppedFramesTotal,
@@ -211,6 +231,11 @@ export default function App() {
           perf.pollCount = 0;
           perf.intervalMsTotal = 0;
           perf.apiMsTotal = 0;
+          perf.rustTotalMsTotal = 0;
+          perf.rustLockMsTotal = 0;
+          perf.rustParseMsTotal = 0;
+          perf.rustBuildPointsMsTotal = 0;
+          perf.rustFramesTotal = 0;
           perf.commitMsTotal = 0;
           perf.commitCount = 0;
           perf.samplesTotal = 0;

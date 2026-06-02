@@ -87,4 +87,15 @@ pub(crate) struct ParsePlotLiveDto {
     pub(crate) points: Vec<PlotPoint>,
     pub(crate) next_sequence: u64,
     pub(crate) dropped_frames: u64,
+    pub(crate) metrics: ParsePlotLiveMetricsDto,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ParsePlotLiveMetricsDto {
+    pub(crate) total_ms: f64,
+    pub(crate) lock_ms: f64,
+    pub(crate) select_layout_ms: f64,
+    pub(crate) parse_ms: f64,
+    pub(crate) build_points_ms: f64,
+    pub(crate) frames: usize,
 }

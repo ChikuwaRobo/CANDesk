@@ -123,6 +123,10 @@ Plotter は画面表示時に parse config と plot layout を自動で読み込
 
 Plotter には暫定のパフォーマンスメトリクスを表示する。Poll は live parse polling の実周期、API は `parsePlotLiveSince` の平均応答時間、Commit は state 更新要求から次の animation frame までの平均時間、Samples は 1 poll あたりの受信 sample 数、FPS は `requestAnimationFrame` ベースの画面更新目安、Dropped は API が返す dropped frame 数を示す。preview 環境のヘッドレス計測では 1 series 選択時に Poll 約 58ms、Commit 約 10～12ms、FPS 約 60、4 series 選択時に Poll 約 56～60ms、Commit 約 9～12ms、FPS 約 60 だった。
 
+実機では API 時間が支配的になるケースがあるため、`parse_plot_live_since` のレスポンスに Rust 内部の内訳 metrics を追加した。Rust は command 内の総処理時間、state lock と履歴取得、parse、plot point 生成、処理 frame 数を示す。API と Rust の差が大きい場合は Tauri IPC / serialize / deserialize の比率が高く、Rust 内訳のいずれかが大きい場合はその処理を優先して最適化する。
+
+実機計測で Rust 時間の大半が Lock に出たため、`parse_plot_live_since` 内で dropped frame 判定用の oldest sequence を取得するために履歴全体を clone していた処理を削除した。`PlotFrameHistory::since_with_oldest` で oldest sequence を O(1) 取得し、clone 対象を cursor 以降の frame だけに限定する。
+
 ## 現在の優先順位
 
 1. 受信表示、CLI capture、server stream の安定化。

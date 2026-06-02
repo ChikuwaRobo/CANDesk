@@ -216,4 +216,12 @@ export type ParsePlotPreviewDto = {
 export type ParsePlotLiveDto = ParsePlotPreviewDto & {
   next_sequence: number;
   dropped_frames: number;
+  metrics: {
+    total_ms: number;
+    lock_ms: number;
+    select_layout_ms: number;
+    parse_ms: number;
+    build_points_ms: number;
+    frames: number;
+  };
 };

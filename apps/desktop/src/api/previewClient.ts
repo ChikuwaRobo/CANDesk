@@ -161,6 +161,14 @@ function makePreviewLiveSince(input: ParsePlotLiveInput): ParsePlotLiveDto {
     points,
     next_sequence: startSequence + previewLiveBatchSize,
     dropped_frames: 0,
+    metrics: {
+      total_ms: 0,
+      lock_ms: 0,
+      select_layout_ms: 0,
+      parse_ms: 0,
+      build_points_ms: 0,
+      frames: previewLiveBatchSize,
+    },
   };
 }
 

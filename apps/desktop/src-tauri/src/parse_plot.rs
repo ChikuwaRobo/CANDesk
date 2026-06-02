@@ -1,9 +1,12 @@
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use canrush_core::parser::{parse_capture_csv_file, parse_frame, ParseConfig};
 use canrush_core::plot::{build_plot_points, PlotLayout};
 
-use crate::dto::{ParsePlotLiveDto, ParsePlotLiveRequestDto, ParsePlotPreviewDto};
+use crate::dto::{
+    ParsePlotLiveDto, ParsePlotLiveMetricsDto, ParsePlotLiveRequestDto, ParsePlotPreviewDto,
+};
 use crate::path::{read_json_file, resolve_existing_path};
 use crate::{ReceiverInner, ReceiverState};
 
@@ -118,6 +121,8 @@ pub(crate) fn parse_plot_live_since_for_state(
     shared: &Arc<Mutex<ReceiverInner>>,
     request: ParsePlotLiveRequestDto,
 ) -> Result<ParsePlotLiveDto, String> {
+    let total_started_at = Instant::now();
+    let lock_started_at = Instant::now();
     let (config, layout, frames, next_sequence, oldest_sequence) = {
         let inner = shared.lock().map_err(|error| error.to_string())?;
         let config = inner
@@ -128,28 +133,29 @@ pub(crate) fn parse_plot_live_since_for_state(
             .plot_layout
             .clone()
             .ok_or_else(|| "plot layout is not loaded".to_string())?;
-        let oldest_sequence = inner
-            .plot_history
-            .since(None)
-            .0
-            .first()
-            .map(|entry| entry.sequence)
-            .unwrap_or(0);
-        let (frames, next_sequence) = inner.plot_history.since(request.since_sequence);
+        let (frames, next_sequence, oldest_sequence) =
+            inner.plot_history.since_with_oldest(request.since_sequence);
         (config, layout, frames, next_sequence, oldest_sequence)
     };
+    let lock_ms = lock_started_at.elapsed().as_secs_f64() * 1000.0;
+    let select_layout_started_at = Instant::now();
     let selected_layout = select_plot_layout(&layout, &request.selected_series_ids);
     let selected_signal_ids = selected_layout
         .panels
         .iter()
         .flat_map(|panel| panel.series.iter().map(|series| series.signal_id.as_str()))
         .collect::<std::collections::HashSet<_>>();
+    let select_layout_ms = select_layout_started_at.elapsed().as_secs_f64() * 1000.0;
+    let parse_started_at = Instant::now();
     let samples = frames
         .iter()
         .flat_map(|entry| parse_frame(&config, &entry.frame, entry.sequence))
         .filter(|sample| selected_signal_ids.contains(sample.signal_id.as_str()))
         .collect::<Vec<_>>();
+    let parse_ms = parse_started_at.elapsed().as_secs_f64() * 1000.0;
+    let build_points_started_at = Instant::now();
     let points = build_plot_points(&selected_layout, &samples);
+    let build_points_ms = build_points_started_at.elapsed().as_secs_f64() * 1000.0;
     let dropped_frames = request
         .since_sequence
         .filter(|since| oldest_sequence > 0 && *since + 1 < oldest_sequence)
@@ -160,6 +166,14 @@ pub(crate) fn parse_plot_live_since_for_state(
         points,
         next_sequence,
         dropped_frames,
+        metrics: ParsePlotLiveMetricsDto {
+            total_ms: total_started_at.elapsed().as_secs_f64() * 1000.0,
+            lock_ms,
+            select_layout_ms,
+            parse_ms,
+            build_points_ms,
+            frames: frames.len(),
+        },
     })
 }
 
@@ -326,6 +340,7 @@ mod tests {
         assert_eq!(preview.points.len(), 1);
         assert_eq!(preview.points[0].series_id, "motor0_rps");
         assert_eq!(preview.next_sequence, 1);
+        assert_eq!(preview.metrics.frames, 1);
 
         let empty = match parse_plot_live_since_for_state(
             &state.inner,
