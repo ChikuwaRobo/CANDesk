@@ -1,19 +1,14 @@
 import {
-  Activity,
   Download,
-  FileJson,
-  LineChart,
   Plug,
   RefreshCw,
   Unplug,
 } from "lucide-react";
 import { formatServerStartedAt } from "../lib/frames";
-import type { ServerInfoDto, WorkspaceView } from "../types";
+import type { ServerInfoDto } from "../types";
 
 type AppHeaderProps = {
   serverInfo: ServerInfoDto;
-  workspaceView: WorkspaceView;
-  onWorkspaceViewChange: (view: WorkspaceView) => void;
   onRefreshPorts: () => void;
   onConnectAll: () => void;
   onDisconnectAll: () => void;
@@ -21,8 +16,6 @@ type AppHeaderProps = {
 
 export function AppHeader({
   serverInfo,
-  workspaceView,
-  onWorkspaceViewChange,
   onRefreshPorts,
   onConnectAll,
   onDisconnectAll,
@@ -44,23 +37,6 @@ export function AppHeader({
         </div>
       </div>
       <div className="toolbar" aria-label="main actions">
-        <div className="workspace-tabs" role="tablist" aria-label="workspace view">
-          {([
-            ["monitor", "Monitor", Activity],
-            ["parser", "Parser", FileJson],
-            ["plotter", "Plotter", LineChart],
-          ] as const).map(([value, label, Icon]) => (
-            <button
-              type="button"
-              key={value}
-              className={workspaceView === value ? "active" : ""}
-              onClick={() => onWorkspaceViewChange(value)}
-            >
-              <Icon size={16} />
-              {label}
-            </button>
-          ))}
-        </div>
         <button type="button" onClick={onRefreshPorts} title="ポート再読み込み">
           <RefreshCw size={16} />
           Refresh

@@ -4,6 +4,27 @@ CANRush は、USB-CAN アダプタを PC から利用するための CAN ビュ�
 
 初期ターゲットは WeActStudio USB2CANFDV1 とする。このデバイスは SLCAN 互換の仮想シリアルインターフェースを持つが、CAN FD 用の独自拡張もあるため、標準 `slcan` とは分けて `weact_slcan_fd` 系 adapter として扱う。
 
+## 2026-06 方針転換
+
+CANRush は、Parser / Plotter / 受信監視を単一 GUI に統合する方針を中止する。当面の製品目標は「CAN フレームを安定して受信し、欠落や異常を把握でき、再利用可能な形式で保存・配信すること」に限定する。
+
+優先する成果物は次の 3 つとする。
+
+1. `canrush-server`: 実デバイスを所有し、接続状態、受信、診断、ストリーム配信を担う常駐プロセス。
+2. `canrush` CLI: adapter bring-up、接続管理、統計確認、確実な CSV capture を行う運用・検証手段。
+3. 受信確認用 GUI: 必要な場合のみ、接続状態と最新フレームを確認する薄い monitor client。
+
+Parser / Plotter は受信基盤の完成条件に含めない。既存の offline CLI、設定形式、sample、core 実装は直ちに削除せず保守モードとするが、次の開発は停止する。
+
+- GUI 上の Parser / Plotter 機能追加と UI 改善。
+- live parse / live plot の性能改善。
+- Tauri backend における parse / plot 専用 state、timer、buffer、command の拡張。
+- 受信 API を Parser / Plotter 固有の都合に合わせる変更。
+
+受信基盤が完成した後、解析機能が必要なら別アプリケーションまたは別パッケージとして再開する。その際は CANRush の安定した stream API または capture file を入力とし、デバイス制御を直接持たせない。
+
+この節は、後続に残る過去の GUI / Parser / Plotter 実装メモより優先する。
+
 ## ドキュメント構成
 
 入口としてはこの文書だけを読む。詳細は目的別に分ける。
@@ -19,22 +40,22 @@ CANRush は、USB-CAN アダプタを PC から利用するための CAN ビュ�
 
 ```text
 +-------------------+      +----------------------+      +----------------------+
-| canrush CLI      |      | Tauri Desktop GUI    |      | future plot/log app  |
-| capture/check    |      | monitor/parser/plot  |      | stream/file input    |
+| canrush CLI      |      | optional monitor GUI |      | future analysis app  |
+| capture/check    |      | status/latest frames |      | stream/file input    |
 +---------+---------+      +----------+-----------+      +----------+-----------+
           |                           |                             |
-          | HTTP / WebSocket          | Tauri IPC + HTTP/WS         | future API
+          | HTTP / WebSocket          | HTTP / WebSocket            | stable API/file
           v                           v                             v
 +----------------------------------------------------------------------------+
 | canrush-server                                                             |
-| bus session management / frame stream / diagnostics / future tx scheduler  |
+| device ownership / receive / frame stream / diagnostics / capture support  |
 +------------------------------------+---------------------------------------+
                                      |
                                      | adapter abstraction
                                      v
 +----------------------------------------------------------------------------+
 | canrush-core                                                               |
-| frame model / protocol parser / adapter helpers / capture / parser / plot  |
+| frame model / protocol parser / adapter helpers / capture / server API     |
 +------------------------------------+---------------------------------------+
                                      |
                                      v
@@ -45,11 +66,13 @@ CANRush は、USB-CAN アダプタを PC から利用するための CAN ビュ�
 
 ```text
 crates/
-  canrush-core/     共通コア。モデル、adapter、capture、server helper、parser、plot。
-  canrush-cli/      CLI。capture、check、server 管理、stats、parse、plot。
+  canrush-core/     共通コア。モデル、adapter、capture、server helper。
+                    既存 parser / plot module は当面保守モード。
+  canrush-cli/      CLI。capture、check、server 管理、stats。
+                    既存 parse / plot command は当面互換維持のみ。
   canrush-server/   headless server。HTTP control API と WebSocket stream。
 apps/
-  desktop/          Tauri + React GUI。
+  desktop/          Tauri + React の受信確認用 GUI。縮小対象。
 doc/
   *.md              設計・仕様メモ。
 examples/
@@ -60,13 +83,72 @@ examples/
 
 - 実 CAN デバイスを開く責務は、通常 `canrush-server` 側に寄せる。
 - GUI と CLI は同じ server stream を購読する client として扱う。
-- GUI 起動時に local server が見つからない場合は自動起動する。手動の Start Server 操作は置かず、利用者は Refresh / Connect から開始する。
+- server は GUI がなくても起動、診断、capture、終了まで完結できるようにする。
+- GUI に server 自動起動を残す場合も補助機能とし、server lifecycle の正規経路は CLI とする。
 - CLI 単独で adapter を開く Standalone mode は、開発時 smoke test、緊急 capture、adapter bring-up 用として残す。
 - 複数バスは `CAN0`、`CAN1` のような論理名で扱う。実用上は 2 バス、最大 4 バス程度を初期想定にする。
-- 受信フレームは共通 `CanFrame` に正規化し、CSV capture、GUI 表示、parser、plotter で同じ表現を使う。
+- 受信フレームは共通 `CanFrame` に正規化し、CSV capture、stream、GUI 表示で同じ表現を使う。
 - 初期 capture file は CSV のみとし、列順と表記をテストで固定する。
-- GUI 内ログよりも CLI capture、接続診断、統計確認を優先する。
+- GUI 内ログよりも CLI capture、接続診断、統計確認、復旧可能性を優先する。
+- capture は欠落を許容しない経路、monitor GUI は表示遅延を避けるため drop を許容する経路として区別する。
+- Parser / Plotter は server の内部責務に入れず、将来も stream または capture file の consumer として分離する。
 - 送信機能は受信表示と capture が安定した後に追加する。定期送信は GUI timer ではなく server 側 scheduler で管理する。
+
+## 受信基盤の完成条件
+
+「画面にフレームが表示された」だけでは受信部分の完成とはしない。最低限、次を満たすことを完成条件とする。
+
+- WeActStudio USB2CANFDV1 で接続、受信、切断、再接続を繰り返しても process が不安定にならない。
+- Classical CAN と CAN FD の frame model、DLC、payload length、BRS、ESI、standard / extended ID を正しく保持する。
+- 2 bus 同時受信で bus が混同されず、bus ごとの frame 数、rate、error、最終受信時刻を確認できる。
+- capture 経路では queue overflow、I/O error、stream 切断を成功扱いにせず、終了理由と欠落有無を利用者へ返す。
+- monitor 購読で drop が発生した場合は dropped count を診断情報として観測できる。
+- adapter の切断、serial read error、設定失敗、server 内部エラーを区別した診断コードで取得できる。
+- fake adapter を使った自動テストで server 起動から stream / capture までを再現できる。
+- 実機で一定時間の連続受信試験を行い、条件、総 frame 数、error 数、drop 数を記録できる。
+- server API と capture CSV の互換性をテストで固定し、GUI や将来の解析アプリから独立して変更管理できる。
+
+性能目標値は推測で固定せず、実機計測から決める。まず「想定最大 frame rate」「連続試験時間」「許容 drop 数」を計測可能にし、その結果を基準値として文書化する。
+
+## 開発ロードマップ
+
+### Phase 0: スコープ固定
+
+- GUI の Parser / Plotter を非優先機能として明示し、新規開発を止める。
+- 既存機能は一度に削除せず、受信経路と結合している箇所を列挙する。
+- issue、テスト、ドキュメントの完了条件を受信中心へ変更する。
+
+2026-06-11 に desktop の画面切替と Parser / Plotter の live 処理を `App.tsx` から外し、GUI を Monitor 専用に変更した。既存の Parser / Plotter component、core module、offline CLI は将来の分離判断に備えて残しているが、通常の GUI 実行経路からは呼び出さない。
+
+### Phase 1: adapter と受信 loop
+
+- WeAct adapter の初期化、timeout、切断、再接続、停止処理を重点的にテストする。
+- protocol parse error と serial I/O error を分離して集計する。
+- adapter capability と実際に適用された bitrate / mode を状態として返す。
+- worker 終了後も `connected` に見える状態をなくし、実行中の状態を server が追跡する。
+
+### Phase 2: 配信、capture、観測性
+
+- capture 購読と monitor 購読の queue / drop 方針を分離し、各カウンタを公開する。
+- stream 切断、遅い consumer、ファイル書き込み失敗時の挙動を固定する。
+- bus ごとの rate、errors、drops、last frame、uptime を CLI から取得可能にする。
+- fake adapter による server + CLI の end-to-end test を追加する。
+
+### Phase 3: 実機耐久試験
+
+- 1 bus、2 bus、CAN FD、高負荷、ケーブル抜去、server 再起動を試験項目にする。
+- capture CSV の frame 数と server 側カウンタを照合する。
+- 再現可能な試験コマンドと結果を文書へ残す。
+
+### Phase 4: 最小 monitor GUI
+
+- GUI を残す場合は bus 接続、状態、最新 frame、rate、errors、drops、pause / clear に限定する。
+- Parser / Plotter 用 hook、timer、buffer、Tauri command は受信 monitor から切り離す。
+- GUI がなくても全受信試験を実行できる状態を維持する。
+
+### Phase 5: 後続機能
+
+受信基盤の完成後に、送信機能、解析アプリ、Parser、Plotter を個別に再評価する。再開判断では、利用目的、入出力契約、性能要件、配布単位を先に決め、再び単一 GUI に無条件で統合しない。
 
 ## 開発コマンド
 
@@ -102,6 +184,16 @@ Tauri backend は `apps/desktop/src-tauri/src/` で module 分割する。GUI DT
 
 2026-05-28 時点の実機最小確認では、WeActStudio 系として `COM3` と `COM85` が見えており、`canrush check --adapter weact --listen-only` で各 1 frame の受信に成功している。
 
+2026-06-11 の方針転換後の実機確認では、WeActStudio USB2CANFDV1 を `COM3` / `CAN0`、`COM85` / `CAN1` として、nominal bitrate `S8`、data bitrate `Y2`、listen-only で使用した。確認結果は次の通り。
+
+- CLI standalone check は両ポートとも 1 frame 受信し、`status=ok`。
+- headless server へ2バスを同時接続し、3秒計測で `CAN0` 約 4,024 fps、`CAN1` 約 5,613 fps、両バスとも error 0。
+- server stream から全バスを2秒間 capture し、19,146 frame を CSV へ保存した。内訳は `CAN0` 7,997 frame、`CAN1` 11,149 frame。
+- capture CSV は既定ヘッダーを保持し、両busの受信frameが混在していることを確認した。
+- 両バスを切断して再接続した後も、`CAN0` 約 4,026 fps、`CAN1` 約 5,617 fps、error 0 で受信を再開した。
+- 実機serverへTauri GUIを接続した状態でもdesktop processは応答状態を維持し、標準エラー出力は空だった。その間のserver計測は `CAN0` 約 4,028 fps、`CAN1` 約 5,622 fps、error 0。
+- server diagnostics には接続・切断情報以外のerrorは記録されなかった。
+
 Tauri 実ウィンドウで確認する場合:
 
 ```powershell
@@ -133,17 +225,20 @@ Plotter の描画は uPlot で復活させた。React state に全 plot point �
 
 ## 現在の優先順位
 
-1. 受信表示、CLI capture、server stream の安定化。
-2. GUI 基本動作の headless smoke test 維持。
-3. Parser / Plotter の sample CSV / JSON 経路を安定化。
-4. GUI の責務分割。`main.tsx` から state 変換、Tauri client、realtime loop、表示 component を段階的に切り出す。
-5. 送信、定期送信、送信プリセットは後続フェーズで実装する。
+1. adapter、server receive loop、停止・再接続処理の安定化。
+2. CLI capture、server stream、drop / error 診断の信頼性向上。
+3. fake adapter を使った end-to-end test と実機耐久試験の整備。
+4. GUI を受信確認用 monitor に縮小し、Parser / Plotter との結合を外す。
+5. 送信、Parser、Plotter、解析 GUI は受信基盤完成後に再評価する。
 
 ## 判断が必要な項目
 
 - Windows で gs_usb 系デバイスを直接扱うか、WinUSB / libusb / 別ドライバを前提にするか。
 - Linux では SocketCAN を主経路にするか、gs_usb を直接 USB protocol として扱う経路も用意するか。
 - 想定する最大 CAN frame rate と GUI 表示上限。
+- capture 経路に必要な queue 上限、backpressure 方針、ディスク書き込みが追いつかない場合の終了条件。
+- 自動再接続を server が行うか、明示的な CLI 操作に限定するか。
+- 実機耐久試験の時間と、許容する error / drop の基準値。
 - CAN FD の最大 data bitrate と BRS 利用有無。
 - capture CSV に送信 frame を含める既定値。
 - 定期送信の最小周期と安全上の上限。
