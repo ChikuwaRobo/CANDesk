@@ -197,7 +197,7 @@ impl SubscribeOptions {
     pub fn gui() -> Self {
         Self {
             kind: SubscriberKind::Gui,
-            queue_capacity: 256,
+            queue_capacity: 16_384,
             bus: None,
             id_filters: Vec::new(),
         }

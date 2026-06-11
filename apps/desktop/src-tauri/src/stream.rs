@@ -5,7 +5,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use canrush_core::api::FrameEventDto;
+use canrush_core::api::{DiagnosticEventDto, FrameEventDto};
 use canrush_core::model::{CanFrame, Direction, FrameFormat, FrameType, IdFormat};
 use serde_json::Value;
 use tungstenite::Message;
@@ -91,7 +91,27 @@ fn handle_stream_message(shared: &Arc<Mutex<ReceiverInner>>, message: Message) {
             },
             Err(error) => update_stream_log(shared, format!("frame event parse failed: {error}")),
         },
-        Some("diagnostic") => update_stream_log(shared, format!("server diagnostic: {text}")),
+        Some("diagnostic") => match serde_json::from_value::<DiagnosticEventDto>(value) {
+            Ok(diagnostic) => {
+                if let Ok(mut inner) = shared.lock() {
+                    inner.stream_dropped_count =
+                        inner.stream_dropped_count.max(diagnostic.dropped_count);
+                    inner.event_log = format!(
+                        "{}: {}{}",
+                        diagnostic.code,
+                        diagnostic.message,
+                        if diagnostic.dropped_count > 0 {
+                            format!(" (dropped={})", diagnostic.dropped_count)
+                        } else {
+                            String::new()
+                        }
+                    );
+                }
+            }
+            Err(error) => {
+                update_stream_log(shared, format!("diagnostic event parse failed: {error}"))
+            }
+        },
         Some("closed") => update_stream_log(shared, format!("server stream closed: {text}")),
         Some(_) | None => {}
     }
@@ -190,12 +210,13 @@ fn update_stream_log(shared: &Arc<Mutex<ReceiverInner>>, message: String) {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 
     #[test]
     fn frame_event_maps_to_can_frame() {
-        let frame = frame_from_event(FrameEventDto {
+        let result = frame_from_event(FrameEventDto {
             event: "frame".to_string(),
             sequence: 42,
             timestamp_host_unix_ns: "1000000001".to_string(),
@@ -209,8 +230,11 @@ mod tests {
             data_length: 12,
             flags: "brs;esi".to_string(),
             data_hex: "000102030405060708090A0B".to_string(),
-        })
-        .expect("frame event should decode");
+        });
+        let frame = match result {
+            Ok(frame) => frame,
+            Err(error) => panic!("frame event should decode: {error}"),
+        };
 
         assert_eq!(frame.bus, "CAN0");
         assert_eq!(frame.id, 0x200);
@@ -224,7 +248,7 @@ mod tests {
 
     #[test]
     fn frame_event_rejects_bad_payload_hex() {
-        let error = frame_from_event(FrameEventDto {
+        let result = frame_from_event(FrameEventDto {
             event: "frame".to_string(),
             sequence: 1,
             timestamp_host_unix_ns: "0".to_string(),
@@ -238,9 +262,32 @@ mod tests {
             data_length: 8,
             flags: "".to_string(),
             data_hex: "ABC".to_string(),
-        })
-        .expect_err("odd-length payload should fail");
+        });
+        let error = match result {
+            Ok(_) => panic!("odd-length payload should fail"),
+            Err(error) => error,
+        };
 
         assert!(error.contains("hex payload length"));
+    }
+
+    #[test]
+    fn diagnostic_event_records_stream_drops() {
+        let shared = Arc::new(Mutex::new(ReceiverInner::default()));
+        handle_stream_message(
+            &shared,
+            Message::Text(
+                r#"{"event":"diagnostic","severity":"error","code":"subscriber-queue-overflow","message":"subscriber queue overflow; frames were dropped","bus":null,"dropped_count":12}"#
+                    .into(),
+            ),
+        );
+
+        let inner = match shared.lock() {
+            Ok(inner) => inner,
+            Err(error) => panic!("receiver state should be available: {error}"),
+        };
+        assert_eq!(inner.stream_dropped_count, 12);
+        assert!(inner.event_log.contains("subscriber-queue-overflow"));
+        assert!(inner.event_log.contains("dropped=12"));
     }
 }

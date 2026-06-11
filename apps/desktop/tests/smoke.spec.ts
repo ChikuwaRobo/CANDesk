@@ -18,7 +18,7 @@ test("monitor toolbar can start connect clear and disconnect headlessly", async 
   await expect(page.getByLabel("local server status")).toContainText("canrush-server-preview");
 
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByText("receiving")).toBeVisible();
+  await expect(page.getByText("receiving", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Clear" }).click();
   await expect(page.getByLabel("latest frames")).toContainText("No frames");
@@ -36,4 +36,5 @@ test("desktop is limited to the receive monitor", async ({ page }) => {
   await expect(page.getByLabel("main actions")).toContainText("Refresh");
   await expect(page.getByLabel("main actions")).toContainText("Connect");
   await expect(page.getByLabel("main actions")).toContainText("Disconnect");
+  await expect(page.getByRole("button", { name: "Capture CSV" })).toHaveCount(0);
 });

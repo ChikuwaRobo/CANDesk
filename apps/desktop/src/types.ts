@@ -22,6 +22,7 @@ export type BusConfig = {
   utilizationPercent: string;
   saturatedLast1sMs: string;
   saturatedWorst1sMs: string;
+  message: string;
 };
 
 export type LatestFrame = {
@@ -97,6 +98,7 @@ export type SnapshotDto = {
   buses: BusStatusDto[];
   frames: LatestFrameDto[];
   event_log: string;
+  stream_dropped_count: number;
 };
 
 export type SortMode = "id" | "bus" | "recent";

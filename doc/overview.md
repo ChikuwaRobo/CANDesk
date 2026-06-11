@@ -231,6 +231,80 @@ Plotter の描画は uPlot で復活させた。React state に全 plot point �
 4. GUI を受信確認用 monitor に縮小し、Parser / Plotter との結合を外す。
 5. 送信、Parser、Plotter、解析 GUI は受信基盤完成後に再評価する。
 
+## 仮リリースまでの作業
+
+仮リリースは、WeActStudio USB2CANFDV1 を Windows PC へ接続し、受信状態の確認と CSV capture を行える評価版とする。Parser、Plotter、送信機能、他adapter対応は仮リリース範囲に含めない。
+
+### P0: リリース前に必須
+
+- [ ] リリース対象を Windows x64、WeActStudio USB2CANFDV1、受信専用と明記する。
+- [ ] nominal bitrate / data bitrate の選択肢と、`S8` / `Y2` などデバイス固有コードの対応を利用者向けに説明する。
+- [x] GUI の `Capture CSV` ボタンを仮リリース画面から削除する。captureはCLIのみとする。
+- [x] GUI で接続失敗、ポート未選択、server起動失敗、受信停止を利用者が判別できる表示にする。
+- [x] server worker が異常終了した場合に、bus status が `connected` のまま残らないようにする。
+- [x] capture中のstream切断、queue overflowを成功扱いにせず、終了理由を表示する。ファイル書き込み失敗は既存のI/O errorとして失敗終了する。
+- [x] monitor用subscriberのdrop数をdiagnosticsとGUI statusから確認できるようにする。
+- [ ] 実機を接続しない状態、片方のポートだけ接続した状態、使用中ポートを選択した状態を確認する。
+- [ ] 2バス同時受信を一定時間継続し、frame数、error数、drop数、メモリ使用量を記録する。
+- [ ] GUI起動、server自動起動、接続、受信、切断、再接続、終了を一連の手順として実機確認する。
+- [x] `cargo test --workspace`、`cargo clippy --workspace --all-targets`、GUI unit test、GUI build、GUI smoke testをすべて成功させる。
+- [ ] Tauriの配布用buildを作成し、開発環境の入っていないWindows環境で起動確認する。配布buildの作成とrelease実行確認は完了。別Windows環境でのinstaller確認は未実施。
+- [ ] アプリ名、version、アイコン、ウィンドウタイトル、配布ファイル名を仮リリース用に確定する。
+- [ ] LICENSE、利用しているOSSのライセンス、著作権表記を確認する。
+- [ ] READMEを現在の構成に合わせ、インストール、起動、接続、capture、終了、既知の制約を記載する。
+- [ ] 仮リリース版の既知の問題と、データ欠落を完全には保証しない評価版であることを明記する。
+
+### P1: 仮リリースの品質を高める
+
+- [ ] server + CLIのfake adapter end-to-end testを自動化する。
+- [ ] GUIが既存serverを利用する場合と、自動起動したserverを利用する場合の両方をテストする。
+- [ ] serial read error、ケーブル抜去、server停止時のdiagnosticsとGUI表示を確認する。
+- [ ] capture CSVのファイル名既定値、保存先、上書き確認、空き容量不足時の挙動を決める。
+- [ ] 設定値を次回起動時に復元するか決める。少なくとも誤ったポート設定を自動接続しない。
+- [ ] ログの保存先、ログレベル、利用者から問題報告を受ける際に必要な情報を決める。
+- [ ] version情報をGUI、CLI、server APIで確認できるようにし、同一リリースか判別可能にする。
+- [ ] リリース成果物にchecksumを付ける。
+
+### P2: 仮リリース後でもよい
+
+- [ ] 自動再接続。
+- [ ] GUIからの高度なCAN ID filterとcapture条件設定。
+- [ ] installerの署名とWindows SmartScreen対策。
+- [ ] 長時間耐久試験のCIまたは専用試験環境への組み込み。
+- [ ] Linux、SocketCAN、gs_usb、他USB-CAN adapter対応。
+- [ ] Parser / Plotterの別アプリケーション化。
+- [ ] CAN送信と定期送信。
+
+### 推奨実施順
+
+1. 仮リリース範囲と既知の制約を固定する。
+2. worker状態、drop検出、capture失敗処理を修正する。
+3. GUIの未実装表示とエラー表示を整理する。
+4. 自動テスト、clippy、実機耐久試験を実施する。
+5. README、LICENSE、version、アイコンなどの配布情報を整える。
+6. Tauri配布buildを作成し、別Windows環境でクリーンインストール試験を行う。
+7. release notes、checksum、既知の問題を添えて仮リリースする。
+
+2026-06-11 に上記の受信経路とGUI表示を更新した。WebSocket送信は10msごとに1 frameだけを送る処理を廃止し、購読queueをまとめてdrainする。queue overflow時は `subscriber-queue-overflow` diagnosticと累積drop数を送信し、CLI captureは失敗終了、GUIはstatus barへ表示する。receive workerがerror終了または予期せず終了した場合はbus statusを`error`へ変更する。
+
+実機2バスをrelease GUIで購読した初回試験では、約9,600 fpsの入力に対して接続直後の過渡状態で12秒間に27 frameのGUI queue dropを検出した。このためGUI購読queueを256から16,384へ拡張した。monitorは引き続きdrop許容経路だが、通常負荷の短い停滞を吸収し、drop時は累積数を必ず表示する。
+
+queue拡張後の再試験では、`CAN0` 約4,025 fps、`CAN1` 約5,616 fpsをrelease GUIで15秒間購読し、subscriber queue drop 0、両bus error 0、desktop process応答正常を確認した。
+
+配布buildでは `apps/desktop/scripts/prepare-sidecar.ps1` がrelease版 `canrush-server.exe` を作成し、Tauri external binaryとしてinstallerへ同梱する。配布用buildコマンドは `npm.cmd run build:bundle` とする。
+
+2026-06-11 に NSIS installer `target/release/bundle/nsis/CANRush_0.1.0_x64-setup.exe` を生成した。最終成果物のファイルサイズは 3,449,987 byte、SHA-256 は `9B3E0A78613D2045031F2817F999EA704B9BD2C2216F70D919334C865BD639CF`。release版desktopを直接起動し、同じrelease directoryのserverを自動起動して `canrush-server-gui` / `canrush.v1` へ接続できることを確認した。installerを使ったクリーン環境試験は残作業とする。
+
+### リリース判定
+
+次をすべて満たした場合に仮リリース可能と判断する。
+
+- P0項目がすべて完了している。
+- 2バス同時受信とCSV captureで再現性のある重大不具合がない。
+- 異常終了やデータ欠落の可能性を、エラーまたはdiagnosticsで利用者が認識できる。
+- 配布物だけで起動でき、開発ツールを必要としない。
+- 操作手順、対応機器、設定値、制約、問題報告方法が文書化されている。
+
 ## 判断が必要な項目
 
 - Windows で gs_usb 系デバイスを直接扱うか、WinUSB / libusb / 別ドライバを前提にするか。

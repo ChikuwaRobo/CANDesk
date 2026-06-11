@@ -284,6 +284,20 @@ label {
   font-weight: 700;
 }
 
+.bus-message {
+  margin: 10px 0 0;
+  padding: 7px 8px;
+  border-radius: 5px;
+  background: #edf4f5;
+  color: #435057;
+  font-size: 12px;
+}
+
+.bus-message.error {
+  background: #f7dfdf;
+  color: #8a2c2c;
+}
+
 .table-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -951,4 +965,8 @@ label {
   background: #17202a;
   color: #edf4f5;
   font-size: 12px;
+}
+
+.status-strip.error {
+  background: #8a2c2c;
 }

@@ -102,6 +102,7 @@ pub(crate) struct ReceiverInner {
     pub(crate) parse_config: Option<ParseConfig>,
     pub(crate) plot_layout: Option<PlotLayout>,
     pub(crate) event_log: String,
+    pub(crate) stream_dropped_count: u64,
 }
 
 #[derive(Default)]

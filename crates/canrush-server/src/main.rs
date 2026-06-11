@@ -65,7 +65,14 @@ struct BusRuntime {
     listen_only: bool,
     message: String,
     stop: Arc<AtomicBool>,
+    worker_state: Arc<Mutex<WorkerState>>,
     handle: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+struct WorkerState {
+    status: String,
+    message: String,
 }
 
 fn app(state: AppState) -> Router {
@@ -146,6 +153,10 @@ fn connect_bus_runtime(
     let frames = Arc::new(AtomicU64::new(0));
     let errors = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
+    let worker_state = Arc::new(Mutex::new(WorkerState {
+        status: "connected".to_string(),
+        message: "receiving".to_string(),
+    }));
     let worker = WorkerContext {
         hub: Arc::clone(&state.hub),
         diagnostics: Arc::clone(&state.diagnostics),
@@ -153,6 +164,7 @@ fn connect_bus_runtime(
         frames: Arc::clone(&frames),
         errors: Arc::clone(&errors),
         stop: Arc::clone(&stop),
+        worker_state: Arc::clone(&worker_state),
     };
     let handle = match adapter.as_str() {
         "fake" => spawn_fake_bus_worker(worker).map_err(|message| {
@@ -187,6 +199,7 @@ fn connect_bus_runtime(
         listen_only: request.listen_only,
         message: "connected".to_string(),
         stop,
+        worker_state,
         handle: Some(handle),
     };
     let status = runtime.status_dto();
@@ -260,17 +273,37 @@ fn disconnect_bus_runtime(
 
 impl BusRuntime {
     fn status_dto(&self) -> BusStatusDto {
+        let (mut status, mut message) = self
+            .worker_state
+            .lock()
+            .map(|state| (state.status.clone(), state.message.clone()))
+            .unwrap_or_else(|_| ("error".to_string(), "worker state lock failed".to_string()));
+        if self.status != "disconnected"
+            && status == "connected"
+            && self.handle.as_ref().is_some_and(JoinHandle::is_finished)
+        {
+            status = "error".to_string();
+            message = "receive worker stopped unexpectedly".to_string();
+        }
         BusStatusDto {
             bus: self.bus.clone(),
             adapter: self.adapter.clone(),
-            status: self.status.clone(),
+            status: if self.status == "disconnected" {
+                self.status.clone()
+            } else {
+                status
+            },
             frames: self.frames.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             port: self.port.clone(),
             bitrate: self.bitrate.clone(),
             data_bitrate: self.data_bitrate.clone(),
             listen_only: self.listen_only,
-            message: self.message.clone(),
+            message: if self.status == "disconnected" {
+                self.message.clone()
+            } else {
+                message
+            },
         }
     }
 }
@@ -325,14 +358,46 @@ async fn handle_stream(mut socket: WebSocket, state: AppState, query: StreamQuer
         }
     };
     let subscription_id = subscription.id();
+    let mut reported_dropped_count = 0;
 
     loop {
-        if let Some(event) = subscription.try_recv() {
-            let dto = FrameEventDto::from_frame(event.sequence, &event.frame);
-            if send_json(&mut socket, &dto).await.is_err() {
+        let dropped_count = state
+            .hub
+            .lock()
+            .ok()
+            .and_then(|hub| hub.subscriber_stats(subscription_id))
+            .map(|stats| stats.dropped_count)
+            .unwrap_or(reported_dropped_count);
+        if dropped_count > reported_dropped_count {
+            let diagnostic = DiagnosticEventDto::new(
+                "error",
+                "subscriber-queue-overflow",
+                "subscriber queue overflow; frames were dropped",
+                query.bus.clone(),
+                dropped_count,
+            );
+            push_diagnostic(&state.diagnostics, diagnostic.clone());
+            if send_json(&mut socket, &diagnostic).await.is_err() {
                 break;
             }
-        } else {
+            reported_dropped_count = dropped_count;
+        }
+
+        let mut sent = 0;
+        while let Some(event) = subscription.try_recv() {
+            let dto = FrameEventDto::from_frame(event.sequence, &event.frame);
+            if send_json(&mut socket, &dto).await.is_err() {
+                if let Ok(mut hub) = state.hub.lock() {
+                    let _ = hub.unsubscribe(subscription_id);
+                }
+                return;
+            }
+            sent += 1;
+            if sent >= queue_capacity {
+                break;
+            }
+        }
+        if sent == 0 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
@@ -370,6 +435,7 @@ struct WorkerContext {
     frames: Arc<AtomicU64>,
     errors: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
+    worker_state: Arc<Mutex<WorkerState>>,
 }
 
 fn spawn_fake_bus_worker(context: WorkerContext) -> Result<JoinHandle<()>, String> {
@@ -388,6 +454,7 @@ fn spawn_fake_bus_worker(context: WorkerContext) -> Result<JoinHandle<()>, Strin
                     context.frames.fetch_add(1, Ordering::Relaxed);
                 } else {
                     context.errors.fetch_add(1, Ordering::Relaxed);
+                    set_worker_error(&context.worker_state, "frame hub lock failed");
                     push_diagnostic(
                         &context.diagnostics,
                         DiagnosticEventDto::new(
@@ -398,6 +465,7 @@ fn spawn_fake_bus_worker(context: WorkerContext) -> Result<JoinHandle<()>, Strin
                             0,
                         ),
                     );
+                    return;
                 }
                 thread::sleep(Duration::from_millis(20));
             }
@@ -473,6 +541,7 @@ fn spawn_weact_bus_worker(
                 Ok(None) => {}
                 Err(_) => {
                     context.errors.fetch_add(1, Ordering::Relaxed);
+                    set_worker_error(&context.worker_state, "weact receive error");
                     push_diagnostic(
                         &context.diagnostics,
                         DiagnosticEventDto::new(
@@ -498,6 +567,13 @@ fn spawn_weact_bus_worker(
             let _ = handle.join();
             Err(format!("timeout waiting for weact startup: {error}"))
         }
+    }
+}
+
+fn set_worker_error(worker_state: &Arc<Mutex<WorkerState>>, message: impl Into<String>) {
+    if let Ok(mut state) = worker_state.lock() {
+        state.status = "error".to_string();
+        state.message = message.into();
     }
 }
 
@@ -661,7 +737,7 @@ mod tests {
         let options = subscribe_options_from_query(&query).unwrap();
 
         assert_eq!(options.kind, SubscriberKind::Gui);
-        assert_eq!(options.queue_capacity, 256);
+        assert_eq!(options.queue_capacity, 16_384);
         assert_eq!(options.bus.as_deref(), Some("CAN0"));
         assert!(options
             .id_filters

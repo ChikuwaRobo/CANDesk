@@ -149,5 +149,6 @@ pub(crate) fn latest_snapshot(
         buses,
         frames,
         event_log: inner.event_log.clone(),
+        stream_dropped_count: inner.stream_dropped_count,
     })
 }

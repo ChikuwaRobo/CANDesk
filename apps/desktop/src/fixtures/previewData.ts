@@ -34,6 +34,7 @@ export const initialBuses: BusConfig[] = [
     utilizationPercent: "-",
     saturatedLast1sMs: "-",
     saturatedWorst1sMs: "-",
+    message: "not connected",
   },
   {
     bus: "CAN1",
@@ -48,6 +49,7 @@ export const initialBuses: BusConfig[] = [
     utilizationPercent: "-",
     saturatedLast1sMs: "-",
     saturatedWorst1sMs: "-",
+    message: "not connected",
   },
 ];
 

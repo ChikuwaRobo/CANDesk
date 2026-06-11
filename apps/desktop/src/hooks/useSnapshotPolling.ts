@@ -57,6 +57,7 @@ export function useSnapshotPolling({
               utilizationPercent: status.utilization_percent,
               saturatedLast1sMs: status.saturated_last_1s_ms,
               saturatedWorst1sMs: status.saturated_worst_1s_ms,
+              message: status.message,
             };
           }),
         );
@@ -64,7 +65,11 @@ export function useSnapshotPolling({
           setFrames(snapshot.frames.map(mapSnapshotFrame));
         }
         if (snapshot.event_log) {
-          setEventLog(snapshot.event_log);
+          setEventLog(
+            snapshot.stream_dropped_count > 0
+              ? `${snapshot.event_log} / stream dropped=${snapshot.stream_dropped_count}`
+              : snapshot.event_log,
+          );
         }
       } catch (error) {
         setEventLog(`snapshot failed: ${String(error)}`);

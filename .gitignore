@@ -5,5 +5,6 @@ dist/
 .tauri/
 apps/desktop/playwright-report/
 apps/desktop/test-results/
+apps/desktop/src-tauri/binaries/*.exe
 .env
 .env.*

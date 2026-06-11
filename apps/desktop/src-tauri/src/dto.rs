@@ -67,6 +67,7 @@ pub(crate) struct SnapshotDto {
     pub(crate) buses: Vec<BusStatusDto>,
     pub(crate) frames: Vec<LatestFrameDto>,
     pub(crate) event_log: String,
+    pub(crate) stream_dropped_count: u64,
 }
 
 #[derive(Debug, Serialize)]

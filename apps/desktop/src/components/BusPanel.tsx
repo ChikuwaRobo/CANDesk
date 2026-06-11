@@ -95,6 +95,11 @@ export function BusPanel({ buses, ports, onUpdateBus }: BusPanelProps) {
               <dd>{bus.saturatedWorst1sMs === "-" ? "-" : `${bus.saturatedWorst1sMs} ms`}</dd>
             </div>
           </dl>
+          {bus.status === "error" || bus.message !== "receiving" ? (
+            <p className={`bus-message ${bus.status === "error" ? "error" : ""}`}>
+              {bus.message}
+            </p>
+          ) : null}
         </article>
       ))}
     </aside>

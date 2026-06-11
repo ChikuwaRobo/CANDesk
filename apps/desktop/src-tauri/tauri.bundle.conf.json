@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "externalBin": [
+      "binaries/canrush-server"
+    ],
+    "shortDescription": "WeActStudio USB2CANFDV1向けCAN受信モニター"
+  }
+}

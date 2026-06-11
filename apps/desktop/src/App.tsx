@@ -107,6 +107,7 @@ export default function App() {
           utilizationPercent: bus.port ? "preview" : "-",
           saturatedLast1sMs: "-",
           saturatedWorst1sMs: "-",
+          message: bus.port ? "preview receiving" : "port is not selected",
         })),
       );
       setFrames((current) =>
@@ -159,6 +160,7 @@ export default function App() {
         utilizationPercent: "-",
         saturatedLast1sMs: "-",
         saturatedWorst1sMs: "-",
+        message: "disconnected",
       })),
     );
     setEventLog("all buses disconnected");

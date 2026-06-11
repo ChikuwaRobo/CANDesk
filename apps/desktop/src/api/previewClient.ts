@@ -243,6 +243,7 @@ export const previewClient: CanRushClient = {
       buses: [],
       frames: [],
       event_log: "browser preview mode; snapshot is simulated",
+      stream_dropped_count: 0,
     };
   },
 };

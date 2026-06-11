@@ -1,9 +1,4 @@
-import {
-  Download,
-  Plug,
-  RefreshCw,
-  Unplug,
-} from "lucide-react";
+import { Plug, RefreshCw, Unplug } from "lucide-react";
 import { formatServerStartedAt } from "../lib/frames";
 import type { ServerInfoDto } from "../types";
 
@@ -48,10 +43,6 @@ export function AppHeader({
         <button type="button" onClick={onDisconnectAll} title="全バス切断">
           <Unplug size={16} />
           Disconnect
-        </button>
-        <button type="button" title="GUIキャプチャは後続実装" disabled>
-          <Download size={16} />
-          Capture CSV
         </button>
       </div>
     </header>
